@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+movement_log.csv
+ideal_trajectory.csv
+hysteresis_trajectory.csv
+collected_data/
+artefact_data/
+runs/
+artefact_detector/exp*/weights/*.pt   # 可选：不提交模型文件（过大）
+*.pkl
+*.npz
+
+# Logs
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db

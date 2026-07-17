@@ -1,0 +1,7 @@
+numpy>=2
+matplotlib
+opencv-python
+joblib
+pandas
+scikit-learn
+ultralytics

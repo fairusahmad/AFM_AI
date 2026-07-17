@@ -1,0 +1,6 @@
+path: ./artefact_data
+train: images
+val: images
+
+nc: 4
+names: ['cross', 'fiducial', 'circle', 'square']
