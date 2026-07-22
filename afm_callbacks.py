@@ -652,6 +652,8 @@ class AFMCallbacks:
         display_fov = rotate_camera_frame(display_fov, self.state.surface_tilt_angle)
         self.img.set_data(display_fov)
         self.img.set_extent([ix, ix + self.state.fov_width, iy + self.state.fov_height, iy])
+        self.ax.set_xlim(ix, ix + self.state.fov_width)
+        self.ax.set_ylim(iy + self.state.fov_height, iy)
         self.update_probe_visuals()
         self.fig.canvas.draw_idle()
 

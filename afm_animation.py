@@ -129,6 +129,8 @@ class AFMAnimation:
 
         self.img.set_data(display_fov)
         self.img.set_extent([ix, ix+self.state.fov_width, iy+self.state.fov_height, iy])
+        self.ax.set_xlim(ix, ix + self.state.fov_width)
+        self.ax.set_ylim(iy + self.state.fov_height, iy)
         self._update_scale_bar(ix, iy, self.state.fov_width, self.state.fov_height)
         if self.probe_update is not None:
             self.probe_update()
@@ -222,6 +224,8 @@ class AFMAnimation:
         display_fov = rotate_camera_frame(display_fov, self.state.surface_tilt_angle)
         self.img.set_data(display_fov)
         self.img.set_extent([x_new, x_new+new_width, y_new+new_height, y_new])
+        self.ax.set_xlim(x_new, x_new + new_width)
+        self.ax.set_ylim(y_new + new_height, y_new)
         self._update_scale_bar(x_new, y_new, new_width, new_height)
         if self.probe_update is not None:
             original_zoom = self.state.current_zoom_level
