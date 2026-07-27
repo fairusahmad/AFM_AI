@@ -631,7 +631,7 @@ def build_site_memory(state, stage_history=None):
         "fov_size_um": {"width_um": float(state.fov_width), "height_um": float(state.fov_height)},
         "zoom_level": float(state.current_zoom_level),
         "magnification": float(state.get_current_objective_magnification()),
-        "tilt_angle_deg": float(state.surface_tilt_angle),
+        "tilt_angle_deg": 0.0,
         "focus_state": {
             "probe_gap_um": float(state.get_probe_sample_gap_um()),
             "focus_offset_um": float(state.get_focus_offset_um()),

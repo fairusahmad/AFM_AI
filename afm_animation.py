@@ -1,5 +1,5 @@
 import numpy as np
-from afm_utils import create_stage_fov, get_scale_bar_geometry, render_camera_frame, render_camera_recognition_frame, rotate_camera_frame, update_title
+from afm_utils import create_stage_fov, get_scale_bar_geometry, render_camera_frame, render_camera_recognition_frame, update_title
 
 class AFMAnimation:
     def __init__(self, state, stage, data, ax, img, ideal_line, hyst_line,
@@ -125,8 +125,6 @@ class AFMAnimation:
         self.state.last_blur_diameter_um = focus_metrics["blur_diameter_um"]
         self.state.last_blur_sigma_px = focus_metrics["sigma_px"]
         self.state.last_dof_camera_um = focus_metrics["dof_camera_um"]
-        display_fov = rotate_camera_frame(display_fov, self.state.surface_tilt_angle)
-
         self.img.set_data(display_fov)
         self.img.set_extent([ix, ix+self.state.fov_width, iy+self.state.fov_height, iy])
         self.ax.set_xlim(ix, ix + self.state.fov_width)
@@ -136,12 +134,11 @@ class AFMAnimation:
             self.probe_update()
         
         # 记录轨迹
-        if not self.state.tilting:
-            tip_x, tip_y = self.get_tip()
-            if self.state.pi_mode:
-                self.data.add_hyst(tip_x, tip_y, self.state.target_x, self.state.target_y)
-            else:
-                self.data.add_ideal(tip_x, tip_y, self.state.target_x, self.state.target_y)
+        tip_x, tip_y = self.get_tip()
+        if self.state.pi_mode:
+            self.data.add_hyst(tip_x, tip_y, self.state.target_x, self.state.target_y)
+        else:
+            self.data.add_ideal(tip_x, tip_y, self.state.target_x, self.state.target_y)
         
         # 更新线条和标题
         self.ideal_line.set_data(self.data.ideal_tip_x, self.data.ideal_tip_y)
@@ -221,7 +218,6 @@ class AFMAnimation:
         self.state.last_blur_diameter_um = focus_metrics["blur_diameter_um"]
         self.state.last_blur_sigma_px = focus_metrics["sigma_px"]
         self.state.last_dof_camera_um = focus_metrics["dof_camera_um"]
-        display_fov = rotate_camera_frame(display_fov, self.state.surface_tilt_angle)
         self.img.set_data(display_fov)
         self.img.set_extent([x_new, x_new+new_width, y_new+new_height, y_new])
         self.ax.set_xlim(x_new, x_new + new_width)

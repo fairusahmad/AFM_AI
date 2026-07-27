@@ -533,7 +533,6 @@ def _layout_utility(panel):
             "hud": [0.35, 0.08, 0.24, BUTTON_HEIGHT_WIDE],
             "clear": [0.63, 0.08, 0.22, BUTTON_HEIGHT_WIDE],
             "scale_bar": [0.07, 0.20, 0.38, BUTTON_HEIGHT_WIDE],
-            "tilt": [0.55, 0.20, 0.30, BUTTON_HEIGHT_WIDE],
             "research_patterns": [0.07, 0.32, 0.78, BUTTON_HEIGHT_WIDE],
             "save_layout": [0.07, 0.44, 0.78, BUTTON_HEIGHT_WIDE],
             "load_default": [0.07, 0.56, 0.38, BUTTON_HEIGHT_WIDE],
@@ -546,7 +545,6 @@ def _layout_utility(panel):
             "coord": [0.07, 0.12, 0.40, BUTTON_HEIGHT_COMPACT],
             "hud": [0.53, 0.12, 0.40, BUTTON_HEIGHT_COMPACT],
             "scale_bar": [0.07, 0.22, 0.40, BUTTON_HEIGHT_COMPACT],
-            "tilt": [0.53, 0.22, 0.40, BUTTON_HEIGHT_COMPACT],
             "research_patterns": [0.07, 0.32, 0.86, BUTTON_HEIGHT_COMPACT],
             "save_layout": [0.07, 0.42, 0.86, BUTTON_HEIGHT_COMPACT],
             "save_default": [0.07, 0.52, 0.86, BUTTON_HEIGHT_COMPACT],
@@ -647,7 +645,6 @@ def setup_dashboard(fig, layout_path=None):
         ("clear", "Clear Path", 8.6),
         ("coord", "Tip Position", 8.5),
         ("hud", "HUD: ON", 8.5),
-        ("tilt", "Stage Tilt", 8.5),
     ]
     for key, label, fontsize in utility_specs:
         button_key, button = utility_panel.add_button(key, label, fontsize=fontsize, role=key)

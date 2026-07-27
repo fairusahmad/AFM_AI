@@ -1,7 +1,7 @@
 import random
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 
 import cv2
 import joblib
@@ -40,7 +40,7 @@ from afm_relocation import (
     transform_point,
     translate_image,
 )
-from afm_utils import create_stage_fov, render_camera_frame, rotate_camera_frame
+from afm_utils import create_stage_fov, render_camera_frame
 from afm_utils import render_camera_recognition_frame
 from artefact_detector import ArtefactDetector
 from image_matching import match_reference_template
@@ -530,14 +530,12 @@ class AFMCallbacks:
         self.state.stage_margin_um = max(2000.0, float(max(self.state.width_um, self.state.height_um)) * 1.5)
         self.state.sample_removed = False
         self.state.show_artifact = False
-        self.state.surface_tilt_angle = float(random.uniform(-10.0, 10.0))
         self.state.z_stage_position_um = float(
             self.state.get_effective_camera_stage_position_um() - self.state.focus_z_um
         )
         self.state.simulated_sample_shift_x_um = 0.0
         self.state.simulated_sample_shift_y_um = 0.0
         self.state.simulated_sample_rotation_deg = 0.0
-        self.state.simulated_sample_tilt_deg = float(self.state.surface_tilt_angle)
         self.state.ai_desired_history_x = [self.state.x, self.state.x]
         self.state.ai_desired_history_y = [self.state.y, self.state.y]
         self._clear_reference_data()
@@ -649,7 +647,6 @@ class AFMCallbacks:
         self.state.last_blur_diameter_um = focus_metrics["blur_diameter_um"]
         self.state.last_blur_sigma_px = focus_metrics["sigma_px"]
         self.state.last_dof_camera_um = focus_metrics["dof_camera_um"]
-        display_fov = rotate_camera_frame(display_fov, self.state.surface_tilt_angle)
         self.img.set_data(display_fov)
         self.img.set_extent([ix, ix + self.state.fov_width, iy + self.state.fov_height, iy])
         self.ax.set_xlim(ix, ix + self.state.fov_width)
@@ -1445,30 +1442,6 @@ class AFMCallbacks:
         finally:
             self._end_action("ml_find_origin")
 
-    def set_tilt(self, event):
-        if self.state.tilting:
-            self.log("Tilt adjustment already open")
-            return
-        self.state.tilting = True
-        root = tk.Tk()
-        try:
-            root.withdraw()
-            angle = simpledialog.askfloat(
-                "Stage Surface Tilt",
-                "Enter stage surface rotation angle (degrees):",
-                initialvalue=float(self.state.surface_tilt_angle),
-                minvalue=-10,
-                maxvalue=10,
-            )
-            if angle is not None:
-                self.state.surface_tilt_angle = float(angle)
-                self._refresh_current_view()
-                self.log(f"Stage surface tilt set to {self.state.surface_tilt_angle:.1f} degrees")
-        finally:
-            root.destroy()
-            self.state.tilting = False
-            self.update_title()
-
     def clear_trails(self, event):
         self.data.clear()
         self.stage.clear_history()
@@ -1588,15 +1561,11 @@ class AFMCallbacks:
         )
 
     def remove_sample(self, event):
-        """Simulate sample removal by translating and rotating the sample relative to the stage."""
+        """Simulate sample removal by translating the sample relative to the stage."""
         self.state.sample_removed = True
         dx = random.uniform(-500, 500)
         dy = random.uniform(-500, 500)
-        rotation_deg = random.uniform(-8.0, 8.0)
-        tilt_deg = random.uniform(-10.0, 10.0)
-        self._apply_simulated_sample_remount(dx, dy, rotation_deg)
-        self.state.surface_tilt_angle = float(tilt_deg)
-        self.state.simulated_sample_tilt_deg = float(tilt_deg)
+        self._apply_simulated_sample_remount(dx, dy, 0.0)
         self.state.target_x = float(self.state.x)
         self.state.target_y = float(self.state.y)
         if self.state.pi_mode:
@@ -1607,8 +1576,7 @@ class AFMCallbacks:
         self._refresh_current_view()
         self.log(
             "Sample removal simulation: sample remounted relative to the stage by "
-            f"dX={dx:+.1f} um, dY={dy:+.1f} um, dTheta={rotation_deg:+.2f} deg, "
-            f"dTilt={tilt_deg:+.2f} deg"
+            f"dX={dx:+.1f} um, dY={dy:+.1f} um"
         )
         if self.state.origin_template is not None:
             self.log("Stored origin template kept for later re-identification after remount.")

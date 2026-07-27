@@ -54,9 +54,6 @@ class AFMState:
         self.current_fov_raw = None
         self.current_camera_view = None
 
-        self.surface_tilt_angle = float(np.random.uniform(-10.0, 10.0))
-        self.probe_tilt_angle = 0.0
-        self.tilting = False
         self.pi_mode = False
 
         self.auto_scan_active = False
@@ -161,7 +158,6 @@ class AFMState:
         self.simulated_sample_shift_x_um = 0.0
         self.simulated_sample_shift_y_um = 0.0
         self.simulated_sample_rotation_deg = 0.0
-        self.simulated_sample_tilt_deg = float(self.surface_tilt_angle)
         self.sample_removed = False
         self.ai_desired_history_x = [self.x, self.x]
         self.ai_desired_history_y = [self.y, self.y]

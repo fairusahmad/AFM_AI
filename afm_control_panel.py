@@ -7,7 +7,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Rectangle
 from pathlib import Path
 import tkinter as tk
-from tkinter import scrolledtext, simpledialog
+from tkinter import scrolledtext
 
 from afm_animation import AFMAnimation
 from afm_callbacks import AFMCallbacks
@@ -15,7 +15,7 @@ from afm_data import TrajectoryData
 from afm_relocation import analyze_landmark_geometry
 from afm_state import AFMState
 from afm_ui import setup_dashboard, setup_figure, setup_probe_graphics
-from afm_utils import create_stage_fov, get_defocus_metrics, get_tip_position, render_camera_frame, render_camera_recognition_frame, rotate_camera_frame, update_title
+from afm_utils import create_stage_fov, get_defocus_metrics, get_tip_position, render_camera_frame, render_camera_recognition_frame, update_title
 from hysteresis import NanoPositioner
 from sample_generation import artifact_layer, height_um, sample as stage_surface_image, width_um
 
@@ -359,15 +359,12 @@ state.current_camera_view, _ = render_camera_recognition_frame(
     visible_body_depth_um=state.probe_visible_body_depth_um,
 )
 img = ax.imshow(
-    rotate_camera_frame(
-        render_camera_frame(
-            initial_fov,
-            state.camera_resolution,
-            outside_mask=initial_outside_mask,
-            focus_model=state.get_focus_model(),
-        )[0],
-        state.surface_tilt_angle,
-    ),
+    render_camera_frame(
+        initial_fov,
+        state.camera_resolution,
+        outside_mask=initial_outside_mask,
+        focus_model=state.get_focus_model(),
+    )[0],
     cmap="gray",
     extent=[initial_ix, initial_ix + state.fov_width, initial_iy + state.fov_height, initial_iy],
     origin="upper",
@@ -517,7 +514,7 @@ trace_dock = None if trace_panel is None else TraceTextDock(fig, manager, trace_
 relocation_help_text = None if relocation_panel is None else relocation_panel.children_by_role["relocation_help"]["artist"]
 relocation_tooltips = {
     "save_ref": "Save Region: store the current low-mag context, high-mag template, zoom context, and landmark memory for later recovery.",
-    "remove_sample": "Remount: simulate taking the sample out and putting it back with shift, rotation, and tilt changes.",
+    "remove_sample": "Remount: simulate taking the sample out and putting it back with shift only.",
     "auto_origin": "Pick Origin: choose the strongest distinctive local landmark in the current viewport as the working origin reference.",
     "ml_origin": "Find Origin: search the full sample for the saved origin pattern and move toward the recognized origin if confidence is good.",
     "relocate": "Recover Site: run coarse low-mag recall, estimate rotation and offset, refine with high-mag matching, and propose the recovered site.",
@@ -789,7 +786,6 @@ def refresh_status_panel():
         f"Simulated Remount Shift: dX={state.simulated_sample_shift_x_um:+7.1f}  dY={state.simulated_sample_shift_y_um:+7.1f}"
     )
     remount_rotation_line = f"Simulated Remount Rotation: {state.simulated_sample_rotation_deg:+7.2f} deg"
-    remount_tilt_line = f"Simulated Remount Tilt: {state.simulated_sample_tilt_deg:+7.2f} deg"
     if state.last_affine_transform_report:
         affine_line = (
             f"Last Affine Recovery: dTheta={state.last_affine_transform_report.get('rotation_deg', 0.0):+6.2f}  "
@@ -943,10 +939,6 @@ def refresh_status_panel():
             "tooltip": "Shows the simulated in-plane sample rotation introduced by the most recent remount action.",
         },
         {
-            "text": remount_tilt_line,
-            "tooltip": "Shows the simulated sample tilt angle introduced by the most recent remount action.",
-        },
-        {
             "text": affine_line,
             "tooltip": "Shows the latest low-magnification affine remount estimate, including the recovered rotation and its confidence.",
         },
@@ -983,10 +975,6 @@ def refresh_status_panel():
         {
             "text": f"Blur Diameter: {focus_metrics['blur_diameter_um']:7.2f} micrometers  {focus_metrics['blur_diameter_px']:6.2f} pixels",
             "tooltip": "Shows the estimated blur spot size caused by defocus, expressed both in stage-space micrometers and in image pixels.",
-        },
-        {
-            "text": f"Surface Tilt Angle: {state.surface_tilt_angle:7.1f} degrees",
-            "tooltip": "Shows the rotation angle applied to the stage surface image for the viewport rendering.",
         },
         {
             "text": f"Field Of View Size: {state.fov_width} x {state.fov_height} micrometers",
@@ -1372,7 +1360,6 @@ bind_logged_button("scale_bar", "Cycle Scale Bar", callbacks.cycle_scale_bar_len
 bind_logged_button("coord", "Show Tip Position", callbacks.show_tip_coord)
 button_objects["hud"].label.set_text(callbacks.get_hud_button_label())
 bind_logged_button("hud", "Toggle HUD", callbacks.toggle_probe_hud)
-bind_logged_button("tilt", "Stage Tilt", callbacks.set_tilt)
 fig.canvas.mpl_connect("button_press_event", handle_detection_roi_press)
 fig.canvas.mpl_connect("button_press_event", callbacks.move_to_clicked_point)
 fig.canvas.mpl_connect("button_press_event", show_viewport_context_menu)
@@ -1436,7 +1423,6 @@ log_message(
     "Start state: "
     f"zoom={state.get_digital_zoom_level():.2f}x, "
     f"HUD={callbacks.get_hud_button_label().split(': ', 1)[1]}, "
-    f"tilt={state.surface_tilt_angle:+.1f} deg, "
     f"focus_offset={state.get_focus_offset_um():+.1f} um, "
     f"X={state.x:.1f} um, Y={state.y:.1f} um"
 )
