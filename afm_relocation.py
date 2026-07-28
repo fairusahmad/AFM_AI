@@ -465,6 +465,35 @@ def rotation_translation_affine(width, height, angle_deg=0.0, shift_x_px=0.0, sh
     return matrix.astype(np.float32)
 
 
+def expanded_rotation_affine(width, height, angle_deg=0.0, shift_x_px=0.0, shift_y_px=0.0):
+    """Compute an expanded output shape and adjusted affine matrix so that
+    the entire rotated+translated image fits without clipping.
+
+    Returns (new_width, new_height, adjusted_2x3_matrix).
+    """
+    center = (float(width) / 2.0, float(height) / 2.0)
+    rot_mat = cv2.getRotationMatrix2D(center, float(angle_deg), 1.0)
+
+    corners = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
+    rotated = cv2.transform(corners.reshape(1, -1, 2), rot_mat).reshape(-1, 2)
+    rotated[:, 0] += float(shift_x_px)
+    rotated[:, 1] += float(shift_y_px)
+
+    min_x = float(np.floor(np.min(rotated[:, 0])))
+    max_x = float(np.ceil(np.max(rotated[:, 0])))
+    min_y = float(np.floor(np.min(rotated[:, 1])))
+    max_y = float(np.ceil(np.max(rotated[:, 1])))
+
+    new_w = int(max_x - min_x)
+    new_h = int(max_y - min_y)
+
+    matrix = rot_mat.copy()
+    matrix[0, 2] += float(shift_x_px) - min_x
+    matrix[1, 2] += float(shift_y_px) - min_y
+
+    return new_w, new_h, matrix.astype(np.float32)
+
+
 def estimate_affine_transform(reference_image, current_image, max_features=600, keep_matches=120):
     ref = to_grayscale_u8(reference_image)
     cur = to_grayscale_u8(current_image)

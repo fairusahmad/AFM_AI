@@ -35,6 +35,9 @@ artefact_detector/exp*/weights/*.pt   # 可选：不提交模型文件（过大�
 # Logs
 *.log
 
+# Codewhale agent metadata
+.codewhale/
+
 # OS metadata
 .DS_Store
 Thumbs.db
