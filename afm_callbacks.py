@@ -29,6 +29,7 @@ from afm_relocation import (
     estimate_landmark_consensus,
     estimate_affine_transform,
     estimate_local_affine_reference_match,
+    expanded_rotation_affine,
     extract_landmarks,
     find_latest_site_memory,
     invert_affine,
@@ -288,11 +289,11 @@ class AFMCallbacks:
         self.state.zoom_base_height = self.state.fov_height
         self.state.zoom_target_width, self.state.zoom_target_height = self.state.get_fov_for_zoom_level(target_zoom_level)
         self.state.target_zoom_level = target_zoom_level
-        self.state.zoom_center_x = self.state.x + self.state.fov_width / 2.0
-        self.state.zoom_center_y = self.state.y + self.state.fov_height / 2.0
+        self.state.zoom_center_x = float(self.state.probe_tip_x)
+        self.state.zoom_center_y = float(self.state.probe_tip_y)
         self.log(
             f"Zoom transition: {self.state.current_zoom_level:g}x -> {target_zoom_level:g}x "
-            f"around X={self.state.zoom_center_x:.1f} um, Y={self.state.zoom_center_y:.1f} um"
+            f"around tip X={self.state.zoom_center_x:.1f} um, Y={self.state.zoom_center_y:.1f} um"
         )
 
     def _set_probe_tip_to_view_center(self):
@@ -1024,32 +1025,55 @@ class AFMCallbacks:
         self.state.simulated_sample_shift_y_um += float(shift_y_um)
 
     def _apply_simulated_sample_remount(self, shift_x_um, shift_y_um, rotation_deg):
-        matrix = rotation_translation_affine(
-            self.state.surface_image.shape[1],
-            self.state.surface_image.shape[0],
-            angle_deg=rotation_deg,
-            shift_x_px=shift_x_um,
-            shift_y_px=shift_y_um,
-        )
+        h, w = self.state.surface_image.shape[:2]
+
+        # -- compute bounding box of rotated+translated content --
+        center = (w / 2.0, h / 2.0)
+        rot = cv2.getRotationMatrix2D(center, float(rotation_deg), 1.0)
+        corners = np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]], dtype=np.float32)
+        rotated = cv2.transform(corners, rot).reshape(-1, 2)
+        rotated[:, 0] += float(shift_x_um)
+        rotated[:, 1] += float(shift_y_um)
+
+        min_x = int(np.floor(np.min(rotated[:, 0])))
+        max_x = int(np.ceil(np.max(rotated[:, 0])))
+        min_y = int(np.floor(np.min(rotated[:, 1])))
+        max_y = int(np.ceil(np.max(rotated[:, 1])))
+
+        new_w = max_x - min_x
+        new_h = max_y - min_y
+
+        # -- adjust matrix: shift origin by (-min_x, -min_y) --
+        matrix = rot.copy()
+        matrix[0, 2] += float(shift_x_um) - float(min_x)
+        matrix[1, 2] += float(shift_y_um) - float(min_y)
+
+        output_shape = (new_h, new_w)
+        median_val = int(np.median(self.state.surface_image))
+
         self.state.surface_image = apply_affine(
-            self.state.surface_image,
-            matrix,
-            output_shape=self.state.surface_image.shape[:2],
+            self.state.surface_image, matrix,
+            output_shape=output_shape,
         )
         self.state.sample = self.state.surface_image
+
         self.state.surface_valid_mask = apply_affine(
             self.state.surface_valid_mask.astype(np.uint8) * 255,
             matrix,
-            output_shape=self.state.surface_image.shape[:2],
+            output_shape=output_shape,
             border_value=0,
         ) > 0
+
         if self.artifact_layer is not None and hasattr(self.artifact_layer, "layer"):
             self.artifact_layer.layer = apply_affine(
-                self.artifact_layer.layer,
-                matrix,
-                output_shape=self.artifact_layer.layer.shape[:2],
-                border_value=0,
+                self.artifact_layer.layer, matrix,
+                output_shape=output_shape, border_value=0,
             )
+
+        self.state.width_um = float(new_w)
+        self.state.height_um = float(new_h)
+        self.state.stage_margin_um = max(2000.0, float(max(new_w, new_h)) * 1.5)
+
         self.state.simulated_sample_shift_x_um += float(shift_x_um)
         self.state.simulated_sample_shift_y_um += float(shift_y_um)
         self.state.simulated_sample_rotation_deg += float(rotation_deg)
