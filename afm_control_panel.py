@@ -7,7 +7,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Rectangle
 from pathlib import Path
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, simpledialog
 
 from afm_animation import AFMAnimation
 from afm_callbacks import AFMCallbacks
