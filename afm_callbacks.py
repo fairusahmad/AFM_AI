@@ -18,8 +18,10 @@ from afm_ml_recognition import (
     MLPatternMatcher,
     MLSameSiteClassifier,
     MLTransformPredictor,
+    MLTransformPredictor5W,
     load_deep_same_site_classifier,
     load_deep_remount_predictor,
+    load_deep_remount_predictor_5w,
 )
 from afm_relocation import (
     analyze_landmark_geometry,
@@ -27,15 +29,12 @@ from afm_relocation import (
     build_overview,
     build_site_memory,
     estimate_landmark_consensus,
-    estimate_affine_transform,
-    estimate_local_affine_reference_match,
     expanded_rotation_affine,
     extract_landmarks,
     find_latest_site_memory,
     invert_affine,
     load_site_memory,
     match_template_candidates,
-    overview_affine_to_fullres,
     persist_site_memory,
     rotation_translation_affine,
     transform_point,
@@ -140,6 +139,7 @@ class AFMCallbacks:
         self.ml_pattern_matcher = None
         self.deep_classifier = None
         self.deep_regressor = None
+        self.deep_regressor_is_5w = False
         self._ml_ready = False
         try:
             self.deep_feature_extractor = DeepFeatureExtractor()
@@ -150,12 +150,36 @@ class AFMCallbacks:
             if self.deep_classifier is not None:
                 self.deep_classifier.extractor = self.deep_feature_extractor
                 self.log("Deep same-site classifier loaded")
-            self.deep_regressor = load_deep_remount_predictor(
-                phase2_models_dir / "deep_remount_predictor.pkl"
+
+            # 优先加载 5w 大样本模型，回退到旧版
+            self.deep_regressor = load_deep_remount_predictor_5w(
+                phase2_models_dir / "deep_remount_predictor_real.pkl"
             )
+            if self.deep_regressor is None:
+                self.deep_regressor = load_deep_remount_predictor_5w(
+                    phase2_models_dir / "deep_remount_predictor_5w.pkl"
+                )
+            if self.deep_regressor is None:
+                # 回退: _final.pkl (用户手动重命名的副本)
+                self.deep_regressor = load_deep_remount_predictor_5w(
+                    phase2_models_dir / "deep_remount_predictor_final.pkl"
+                )
             if self.deep_regressor is not None:
                 self.deep_regressor.extractor = self.deep_feature_extractor
-                self.log("Deep remount predictor loaded")
+                self.deep_regressor_is_5w = True
+                self.log("Deep remount predictor loaded (5w large-sample model)")
+            else:
+                # 最后回退: 旧版模型
+                self.deep_regressor = load_deep_remount_predictor(
+                    phase2_models_dir / "deep_remount_predictor.pkl"
+                )
+                if self.deep_regressor is not None:
+                    self.deep_regressor.extractor = self.deep_feature_extractor
+                    self.log("Deep remount predictor loaded (legacy model)")
+
+            if self.deep_regressor is not None:
+                pass  # 已在上面各自记录
+
             self._ml_ready = self.deep_classifier is not None or self.deep_regressor is not None
             if self._ml_ready:
                 self.log("Deep ML recognition ENABLED")
@@ -978,35 +1002,115 @@ class AFMCallbacks:
 
     def _estimate_coarse_affine_transform(self):
         site_memory = self.state.site_memory or {}
-        reference_overview = site_memory.get("overview")
-        if reference_overview is None:
+        ref_tpl = self.state.ref_template
+        if ref_tpl is None:
+            self.log("No ref_template available")
             return None
+
+        ref_tl = site_memory.get("reference_top_left") or {}
+        ref_x = float(ref_tl.get("x_um", self.state.ref_x))
+        ref_y = float(ref_tl.get("y_um", self.state.ref_y))
+        search_half = max(self.state.relocation_fine_half_range_um * 6, 4000)
+        tpl_h, tpl_w = ref_tpl.shape[:2]
+
+        # -- ML 预估旋转, 缩小 NCC 搜索范围 --
+        ml_angle = None
+        if self.deep_regressor is not None:
+            try:
+                crop = self.state.surface_image[int(ref_y):int(ref_y)+tpl_h,
+                                                int(ref_x):int(ref_x)+tpl_w]
+                if crop.shape == ref_tpl.shape:
+                    result = self.deep_regressor.predict(ref_tpl, crop)
+                    if result is not None:
+                        ml_angle = float(result["angle_deg"])
+                        self.log(f"[ML] rotation estimate: {ml_angle:+.2f} deg")
+            except:
+                pass
+        use_ml_narrow = self.state.force_ml_mode and ml_angle is not None
+        if use_ml_narrow:
+            sweep = list(range(int(ml_angle)-4, int(ml_angle)+5, 2))
+            if 0 not in sweep: sweep.append(0)
+            angles_to_try = sorted(set(sweep))
+            self.log(f"[ML mode ON] narrow sweep around {ml_angle:+.1f} deg: {angles_to_try}")
+        else:
+            angles_to_try = list(range(-10, 11, 2))
+            if ml_angle is not None:
+                self.log(f"[ML mode OFF] full sweep (ML says {ml_angle:+.1f} deg but force_ml_mode=False)")
+        ncc_match = None
+        best_angle = 0.0
+        self.log(f"[NCC] trying angles: {angles_to_try}")
+
+        for try_angle in angles_to_try:
+            if abs(try_angle) > 0.5:
+                rm = cv2.getRotationMatrix2D((tpl_w / 2, tpl_h / 2), -try_angle, 1.0)
+                tpl = cv2.warpAffine(ref_tpl, rm, (tpl_w, tpl_h), borderMode=cv2.BORDER_REPLICATE)
+            else:
+                tpl = ref_tpl
+            match = match_reference_template(self.state.surface_image, tpl, ref_x, ref_y, half_range=search_half)
+            if match is not None and (ncc_match is None or match["score"] > ncc_match["score"]):
+                ncc_match = match
+                best_angle = try_angle
+                self.log(f"[NCC] angle={try_angle:+.1f} deg score={match['score']:.3f} at ({match['x']:.0f},{match['y']:.0f})")
+
+        if ncc_match is None:
+            self.log("[NCC] no match found on surface")
+            return None
+
+        dx_ncc = ncc_match["x"] - ref_x
+        dy_ncc = ncc_match["y"] - ref_y
+        final_angle = best_angle
+        self.log(f"[NCC] result: dX={dx_ncc:+.0f} dY={dy_ncc:+.0f} um angle={final_angle:+.2f} deg score={ncc_match['score']:.3f}")
+
+        # -- Step 3: ML verification (optional) --
+        ml_prediction = None
+        if self.deep_regressor is not None:
+            try:
+                mx2, my2 = int(round(ncc_match["x"])), int(round(ncc_match["y"]))
+                sh2, sw2 = self.state.surface_image.shape[:2]
+                cx2, cy2 = min(sw2, mx2 + tpl_w), min(sh2, my2 + tpl_h)
+                if cx2 - mx2 >= tpl_w // 2 and cy2 - my2 >= tpl_h // 2:
+                    vc = self.state.surface_image[my2:cy2, mx2:cx2]
+                    if vc.shape[0] != tpl_h or vc.shape[1] != tpl_w:
+                        fv = int(np.median(self.state.surface_image))
+                        vc = cv2.copyMakeBorder(vc, 0, tpl_h - vc.shape[0], 0, tpl_w - vc.shape[1],
+                                                borderType=cv2.BORDER_CONSTANT, value=fv)
+                    mr = self.deep_regressor.predict(ref_tpl, vc)
+                    if mr is not None:
+                        ml_prediction = {"dx_um": mr["dx_px"], "dy_um": mr["dy_px"], "dtheta_deg": mr["angle_deg"]}
+            except Exception as e:
+                self.log(f"[ML verify] failed: {e}")
+
+        # -- Build report --
+        theta_rad = np.radians(final_angle)
+        cos_t, sin_t = np.cos(theta_rad), np.sin(theta_rad)
+        full_matrix = np.array([[cos_t, -sin_t, dx_ncc], [sin_t, cos_t, dy_ncc]], dtype=np.float32)
+        affine = {"matrix": full_matrix.copy(), "rotation_deg": final_angle, "scale": 1.0,
+                  "translation_px": (dx_ncc, dy_ncc), "match_count": 1, "inlier_count": 1,
+                  "confidence": float(ncc_match["score"])}
+
+        reference_overview = site_memory.get("overview")
         current_overview = build_overview(self.state.surface_image)
         if current_overview is None:
-            return None
-        affine = estimate_affine_transform(reference_overview["image"], current_overview["image"])
-        if affine is None:
-            return None
-        full_matrix = overview_affine_to_fullres(
-            affine["matrix"],
-            reference_overview,
-            current_overview,
-        )
+            current_overview = {}
+        if reference_overview is None:
+            reference_overview = {}
         report = dict(affine)
         report["current_overview"] = current_overview
         report["full_matrix"] = full_matrix
-        report["retrieval_candidates"] = retrieve_lowmag_candidates(
-            self.lowmag_embedding_index,
-            current_overview["image"],
-            top_k=3,
+        report["ml_remount_prediction"] = ml_prediction
+        cur_img = current_overview.get("image")
+        ref_img = reference_overview.get("image")
+        report["retrieval_candidates"] = (
+            retrieve_lowmag_candidates(self.lowmag_embedding_index, cur_img, top_k=3)
+            if cur_img is not None else []
         )
-        report["predicted_remount_transform"] = predict_remount_transform(
-            self.remount_transform_predictor,
-            reference_overview["image"],
-            current_overview["image"],
+        report["predicted_remount_transform"] = (
+            predict_remount_transform(self.remount_transform_predictor, ref_img, cur_img)
+            if ref_img is not None and cur_img is not None else None
         )
         self.state.last_affine_transform_report = report
         return report
+
 
     def _apply_simulated_sample_translation(self, shift_x_um, shift_y_um):
         self.state.surface_image = translate_image(self.state.surface_image, shift_x_um, shift_y_um)
@@ -1101,14 +1205,22 @@ class AFMCallbacks:
         surface_image = self.state.surface_image if surface_image is None else surface_image
         site_memory = self.state.site_memory if site_memory is None else site_memory
         template_h, template_w = self.state.ref_template.shape[:2]
+
+        # Pad surface with median color if template is larger than surface
+        sh, sw = surface_image.shape[:2]
+        verify_margin = int(self.state.relocation_verify_half_range_um * 2 + 40)
+        pad_x = max(0, template_w + verify_margin - sw)
+        pad_y = max(0, template_h + verify_margin - sh)
+        if pad_x > 0 or pad_y > 0:
+            fill_val = float(np.median(surface_image))
+            surface_image = cv2.copyMakeBorder(
+                surface_image, 0, pad_y, 0, pad_x,
+                borderType=cv2.BORDER_CONSTANT, value=fill_val,
+            )
+
+        scaled_top_left_x = top_left_x * verify_scale
+        scaled_top_left_y = top_left_y * verify_scale
         verify_match = match_reference_template(
-            surface_image,
-            self.state.ref_template,
-            top_left_x,
-            top_left_y,
-            half_range=self.state.relocation_verify_half_range_um,
-        )
-        affine_verify = estimate_local_affine_reference_match(
             surface_image,
             self.state.ref_template,
             top_left_x,
@@ -1170,15 +1282,10 @@ class AFMCallbacks:
             verify_match["score"] >= self.state.relocation_min_match_score
             and verify_match.get("score_gap", 0.0) >= self.state.relocation_min_score_gap
         )
-        affine_ok = (
-            affine_verify is not None
-            and affine_verify["confidence"] >= self.state.relocation_min_affine_confidence
-            and affine_verify["inlier_count"] >= self.state.relocation_min_affine_inliers
-        )
         landmark_ok = (
             landmark_consensus is None
             or (
-                landmark_consensus["support_count"] >= self.state.relocation_min_landmark_support
+                landmark_consensus.get("support_count", 0) >= self.state.relocation_min_landmark_support
                 and landmark_consensus["confidence"] >= self.state.relocation_min_match_score
             )
         )
@@ -1200,12 +1307,12 @@ class AFMCallbacks:
         )
         same_site_ok = same_site_probability is None or same_site_probability >= 0.50
         return {
-            "verified": bool((match_ok or affine_ok) and landmark_ok and geometry_ok and same_site_ok),
+            "verified": bool(match_ok and landmark_ok and geometry_ok and same_site_ok),
             "reference_score": float(verify_match["score"]),
             "reference_score_gap": float(verify_match.get("score_gap", 0.0)),
             "reference_match_x_um": float(verify_match["x"]),
             "reference_match_y_um": float(verify_match["y"]),
-            "affine_verify": affine_verify,
+            "affine_verify": None,
             "landmark_consensus": landmark_consensus,
             "geometry_check": geometry_check,
             "same_site_probability": same_site_probability,
@@ -1668,25 +1775,82 @@ class AFMCallbacks:
                 fine_search_target_y = coarse_target_y
 
             affine_report = self._estimate_coarse_affine_transform()
-            if affine_report is not None and affine_report["confidence"] >= self.state.relocation_min_affine_confidence:
+            has_rotation = (
+                affine_report is not None
+                and abs(affine_report.get("rotation_deg", 0.0)) > 1.0
+            )
+            use_de_rotation = (
+                has_rotation
+                and affine_report["confidence"] >= max(self.state.relocation_min_affine_confidence, 0.30)
+            )
+
+            if use_de_rotation:
+                # 有旋转且置信度高 → de-rotate surface 后细搜索
                 fine_to_current_matrix = affine_report["full_matrix"]
-                fine_search_surface = apply_affine(
-                    self.state.surface_image,
-                    invert_affine(fine_to_current_matrix),
-                    output_shape=self.state.surface_image.shape[:2],
+                inv_matrix = invert_affine(fine_to_current_matrix)
+                ref_x = float(self.state.ref_x)
+                ref_y = float(self.state.ref_y)
+                template_h, template_w = self.state.ref_template.shape[:2]
+                search_margin = (
+                    self.state.relocation_fine_half_range_um * 4.0
+                    + max(float(template_w), float(template_h))
                 )
-                fine_search_target_x = float(self.state.ref_x)
-                fine_search_target_y = float(self.state.ref_y)
+
+                # Handle negative reference coordinates: the reference may be
+                # outside the warped image bounds.  Expand canvas and shift so
+                # the reference lands in a searchable positive region.
+                offset_x = (-ref_x + search_margin) if ref_x < 0 else 0.0
+                offset_y = (-ref_y + search_margin) if ref_y < 0 else 0.0
+                surface_h, surface_w = self.state.surface_image.shape[:2]
+
+                if offset_x > 0 or offset_y > 0:
+                    new_w = int(surface_w + offset_x)
+                    new_h = int(surface_h + offset_y)
+                    adjusted_inv = inv_matrix.copy()
+                    adjusted_inv[0, 2] = (
+                        inv_matrix[0, 2]
+                        - (inv_matrix[0, 0] * offset_x + inv_matrix[0, 1] * offset_y)
+                    )
+                    adjusted_inv[1, 2] = (
+                        inv_matrix[1, 2]
+                        - (inv_matrix[1, 0] * offset_x + inv_matrix[1, 1] * offset_y)
+                    )
+                    fine_search_surface = apply_affine(
+                        self.state.surface_image, adjusted_inv,
+                        output_shape=(new_h, new_w),
+                    )
+                else:
+                    fine_search_surface = apply_affine(
+                        self.state.surface_image, inv_matrix,
+                        output_shape=(surface_h, surface_w),
+                    )
+                fine_search_target_x = ref_x + offset_x
+                fine_search_target_y = ref_y + offset_y
+                self.log(
+                    f"Fine search surface: shape={fine_search_surface.shape}, "
+                    f"min={np.min(fine_search_surface):.0f}, max={np.max(fine_search_surface):.0f}, "
+                    f"mean={np.mean(fine_search_surface):.1f}, "
+                    f"offset=({offset_x:.0f},{offset_y:.0f})"
+                )
+                self.log(
+                    f"Invert affine matrix: "
+                    f"[{inv_matrix[0,0]:.4f},{inv_matrix[0,1]:.4f},{inv_matrix[0,2]:.1f}; "
+                    f"{inv_matrix[1,0]:.4f},{inv_matrix[1,1]:.4f},{inv_matrix[1,2]:.1f}]"
+                )
                 coarse_target_x, coarse_target_y = transform_point(
                     fine_to_current_matrix,
                     self.state.ref_x,
                     self.state.ref_y,
                 )
                 self.log(
-                    "Coarse affine recovery: "
-                    f"dTheta={affine_report['rotation_deg']:+.2f} deg, "
-                    f"inliers={affine_report['inlier_count']}/{affine_report['match_count']}, "
-                    f"confidence={affine_report['confidence']:.3f}"
+                    (
+                        "[ML mode] Coarse localization: "
+                        if affine_report.get("ml_remount_prediction")
+                        else "Coarse affine recovery: "
+                    )
+                    + f"dTheta={affine_report['rotation_deg']:+.2f} deg, "
+                    + f"inliers={affine_report['inlier_count']}/{affine_report['match_count']}, "
+                    + f"confidence={affine_report['confidence']:.3f}"
                 )
                 predicted_transform = affine_report.get("predicted_remount_transform")
                 if predicted_transform is not None:
@@ -1696,6 +1860,14 @@ class AFMCallbacks:
                         f"dY={predicted_transform['dy_um']:+.1f} um, "
                         f"dTheta={predicted_transform['dtheta_deg']:+.2f} deg"
                     )
+                ml_remount = affine_report.get("ml_remount_prediction")
+                if ml_remount is not None:
+                    self.log(
+                        "[ML mode] 5w model prediction: "
+                        f"dX={ml_remount['dx_um']:+.1f} um, "
+                        f"dY={ml_remount['dy_um']:+.1f} um, "
+                        f"dTheta={ml_remount['dtheta_deg']:+.2f} deg"
+                    )
                 retrieval_candidates = affine_report.get("retrieval_candidates") or []
                 if retrieval_candidates:
                     best_candidate = retrieval_candidates[0]
@@ -1704,6 +1876,17 @@ class AFMCallbacks:
                         f"{best_candidate.get('site_id', 'unknown')} "
                         f"(distance {best_candidate['distance']:.3f})"
                     )
+            elif affine_report is not None:
+                # NCC 粗定位 (无旋转) → 用匹配位置做细搜索起点
+                dx_total = float(affine_report["translation_px"][0])
+                dy_total = float(affine_report["translation_px"][1])
+                fine_search_target_x = float(self.state.ref_x + dx_total)
+                fine_search_target_y = float(self.state.ref_y + dy_total)
+                self.log(
+                    "Coarse NCC localization: "
+                    f"dX={dx_total:+.1f} um, dY={dy_total:+.1f} um, "
+                    f"confidence={affine_report['confidence']:.3f}"
+                )
 
             if fine_to_current_matrix is None and site_memory.get("lowmag_landmarks"):
                 overview = build_overview(self.state.surface_image)
@@ -1734,58 +1917,70 @@ class AFMCallbacks:
 
             desired_x = float(fine_search_target_x)
             desired_y = float(fine_search_target_y)
+            # If the reference template is larger than the search surface
+            # (can happen after remount cropping), pad the surface instead of
+            # scaling the template — this preserves coordinate accuracy.
+            template_h, template_w = self.state.ref_template.shape[:2]
+            surface_h, surface_w = fine_search_surface.shape[:2]
+            max_range = self.state.relocation_fine_half_range_um * 4.0
+            pad_x = int(max(0, template_w + 2 * max_range + 40 - surface_w))
+            pad_y = int(max(0, template_h + 2 * max_range + 40 - surface_h))
+            if pad_x > 0 or pad_y > 0:
+                fill_val = float(np.median(fine_search_surface))
+                fine_search_surface = cv2.copyMakeBorder(
+                    fine_search_surface, 0, pad_y, 0, pad_x,
+                    borderType=cv2.BORDER_CONSTANT, value=fill_val,
+                )
+                self.log(
+                    f"Padded search surface by (+{pad_x}, +{pad_y}) px "
+                    f"to fit {template_w}x{template_h} template"
+                )
             fine_match = None
-            fine_affine = None
-            for iteration in range(int(self.state.relocation_max_iterations)):
-                fine_affine = estimate_local_affine_reference_match(
-                    fine_search_surface,
-                    self.state.ref_template,
-                    desired_x,
-                    desired_y,
-                    half_range=self.state.relocation_fine_half_range_um,
-                )
-                fine_match = match_reference_template(
-                    fine_search_surface,
-                    self.state.ref_template,
-                    desired_x,
-                    desired_y,
-                    half_range=self.state.relocation_fine_half_range_um,
-                )
-                if (
-                    fine_affine is not None
-                    and fine_affine["confidence"] >= self.state.relocation_min_affine_confidence
-                    and fine_affine["inlier_count"] >= self.state.relocation_min_affine_inliers
-                ):
-                    desired_x = float(fine_affine["x"])
-                    desired_y = float(fine_affine["y"])
-                    self.log(
-                        f"Fine affine pass {iteration + 1}: "
-                        f"X={desired_x:.1f} um, Y={desired_y:.1f} um, "
-                        f"dTheta={fine_affine['rotation_deg']:+.2f} deg, "
-                        f"inliers={fine_affine['inlier_count']}/{fine_affine['match_count']}, "
-                        f"confidence={fine_affine['confidence']:.3f}"
+            search_half_range = self.state.relocation_fine_half_range_um
+            max_search_half_range = self.state.relocation_fine_half_range_um * 4.0
+            self.log(
+                f"Fine search starting at X={desired_x:.1f} um, Y={desired_y:.1f} um, "
+                f"half_range={search_half_range:.0f} um"
+            )
+            while True:
+                for iteration in range(int(self.state.relocation_max_iterations)):
+                    fine_match = match_reference_template(
+                        fine_search_surface,
+                        self.state.ref_template,
+                        desired_x,
+                        desired_y,
+                        half_range=search_half_range,
                     )
-                elif fine_match is not None:
-                    desired_x = float(fine_match["x"])
-                    desired_y = float(fine_match["y"])
+                    if fine_match is not None:
+                        desired_x = float(fine_match["x"])
+                        desired_y = float(fine_match["y"])
+                        self.log(
+                            f"Fine relocation pass {iteration + 1}: "
+                            f"X={desired_x:.1f} um, Y={desired_y:.1f} um, "
+                            f"score={fine_match['score']:.3f}, gap={fine_match.get('score_gap', 0.0):.3f}"
+                        )
+                        break
+                if fine_match is not None:
+                    if (
+                        fine_match is not None
+                        and fine_match["score"] >= self.state.relocation_min_match_score
+                        and fine_match.get("score_gap", 0.0) >= self.state.relocation_min_score_gap
+                    ):
+                        break
+                    self.log("Fine match found but quality insufficient; expanding range")
+                    fine_match = None
+                search_half_range *= 2.0
+                if search_half_range > max_search_half_range:
                     self.log(
-                        f"Fine relocation pass {iteration + 1}: "
-                        f"X={desired_x:.1f} um, Y={desired_y:.1f} um, "
-                        f"score={fine_match['score']:.3f}, gap={fine_match.get('score_gap', 0.0):.3f}"
+                        f"Reference template could not be matched "
+                        f"(tried up to {max_search_half_range:.0f} um half-range)"
                     )
-                else:
-                    self.log("Reference template could not be matched in the fine search area")
                     return
-                if (
-                    fine_affine is not None
-                    and fine_affine["confidence"] >= self.state.relocation_min_affine_confidence
-                    and fine_affine["inlier_count"] >= self.state.relocation_min_affine_inliers
-                ):
-                    break
-                if fine_match is not None and fine_match["score"] >= self.state.relocation_min_match_score and fine_match.get("score_gap", 0.0) >= self.state.relocation_min_score_gap:
-                    break
+                self.log(
+                    f"No match at current range, expanding to half_range={search_half_range:.0f} um"
+                )
 
-            if fine_match is None and fine_affine is None:
+            if fine_match is None:
                 self.log("Fine relocation did not produce a usable reference match.")
                 return
 
@@ -1901,7 +2096,7 @@ class AFMCallbacks:
     # ------------------------------------------------------------------
     # ML Recognition Helpers
     # ------------------------------------------------------------------
-    def _ml_recognize_pattern(self, search_image, ref_template):
+    def _ml_recognize_pattern(self, search_image, ref_template, center_x=None, center_y=None, half_range_um=None):
         """用 ML 特征匹配在 search_image 中找到 ref_template 的最佳匹配位置。
 
         Returns:
@@ -1910,6 +2105,25 @@ class AFMCallbacks:
         if not self._use_ml() or self.ml_pattern_matcher is None:
             return None
         try:
+            # 如果提供了搜索范围，裁剪搜索图像以加速
+            if center_x is not None and center_y is not None and half_range_um is not None:
+                tpl_h, tpl_w = ref_template.shape[:2]
+                sch_h, sch_w = search_image.shape[:2]
+                x0 = int(max(0, center_x - half_range_um))
+                y0 = int(max(0, center_y - half_range_um))
+                x1 = int(min(sch_w, center_x + half_range_um + tpl_w))
+                y1 = int(min(sch_h, center_y + half_range_um + tpl_h))
+                if x1 <= x0 or y1 <= y0:
+                    return None
+                cropped = search_image[y0:y1, x0:x1]
+                matches = self.ml_pattern_matcher.match(
+                    ref_template, cropped, top_k=1, stride_frac=0.25, min_score=0.35
+                )
+                if matches:
+                    best = matches[0]
+                    return (best["x"] + x0, best["y"] + y0, best["score"])
+                return None
+
             matches = self.ml_pattern_matcher.match(
                 ref_template, search_image, top_k=1, stride_frac=0.30, min_score=0.35
             )
@@ -1920,16 +2134,25 @@ class AFMCallbacks:
             self.log(f"ML pattern recognition failed: {e}")
         return None
 
-    def _ml_predict_remount(self, ref_overview_image, cur_overview_image):
+    def _ml_predict_remount(self, ref_overview_image, cur_overview_image,
+                            scale_x_um_per_px=1.0, scale_y_um_per_px=1.0):
         """用 ML 回归器预测 remount 变换 (dx, dy, dtheta)。
 
         Returns:
             dict: {"dx_um": float, "dy_um": float, "dtheta_deg": float} 或 None
         """
-        if not self._use_ml() or self.deep_regressor is None:
+        if self.deep_regressor is None:
             return None
         try:
-            return self.deep_regressor.predict(ref_overview_image, cur_overview_image)
+            if self.deep_regressor_is_5w:
+                result = self.deep_regressor.predict_um(
+                    ref_overview_image, cur_overview_image,
+                    scale_x_um_per_px=scale_x_um_per_px,
+                    scale_y_um_per_px=scale_y_um_per_px,
+                )
+            else:
+                result = self.deep_regressor.predict(ref_overview_image, cur_overview_image)
+            return result
         except Exception as e:
             self.log(f"ML remount prediction failed: {e}")
         return None
@@ -2037,17 +2260,47 @@ class AFMCallbacks:
                         fine_search_target_x = float(coarse_result["offset_x_um"] + self.state.ref_x)
                         fine_search_target_y = float(coarse_result["offset_y_um"] + self.state.ref_y)
 
+            # ── ML Remount fallback for coarse positioning ──
+            ml_remount = None
+            if fine_to_current_matrix is None and coarse_result is None:
+                cur_overview = build_overview(self.state.surface_image)
+                if cur_overview is not None and site_memory.get("overview", {}).get("image") is not None:
+                    ml_remount = self._ml_predict_remount(
+                        site_memory.get("overview", {}).get("image"),
+                        cur_overview.get("image"),
+                        scale_x_um_per_px=cur_overview.get("scale_x_um_per_px", 1.0),
+                        scale_y_um_per_px=cur_overview.get("scale_y_um_per_px", 1.0),
+                    )
+                    if ml_remount is not None:
+                        fine_search_target_x = float(self.state.ref_x + ml_remount["dx_um"])
+                        fine_search_target_y = float(self.state.ref_y + ml_remount["dy_um"])
+                        self.log(
+                            f"🤖 ML remount guides coarse: "
+                            f"dX={ml_remount['dx_um']:+.1f} um, "
+                            f"dY={ml_remount['dy_um']:+.1f} um, "
+                            f"dTheta={ml_remount['dtheta_deg']:+.2f} deg"
+                        )
+                else:
+                    ml_remount = None
+
             # ── Fine relocation: ML path first, fall back to CV ──
             ml_match_result = self._ml_recognize_pattern(
-                fine_search_surface, self.state.ref_template
+                fine_search_surface, self.state.ref_template,
+                center_x=fine_search_target_x, center_y=fine_search_target_y,
+                half_range_um=self.state.relocation_fine_half_range_um * 2,
             )
-            ml_remount = self._ml_predict_remount(
-                site_memory.get("overview", {}).get("image"),
-                build_overview(self.state.surface_image).get("image") if build_overview(self.state.surface_image) is not None else None,
-            )
+            # If coarse positioning already succeeded (affine/landmarks), still try ML remount for logging
+            if ml_remount is None:
+                cur_overview = build_overview(self.state.surface_image)
+                if cur_overview is not None and site_memory.get("overview", {}).get("image") is not None:
+                    ml_remount = self._ml_predict_remount(
+                        site_memory.get("overview", {}).get("image"),
+                        cur_overview.get("image"),
+                        scale_x_um_per_px=cur_overview.get("scale_x_um_per_px", 1.0),
+                        scale_y_um_per_px=cur_overview.get("scale_y_um_per_px", 1.0),
+                    )
 
             fine_match = None
-            fine_affine = None
             ml_used = False
 
             if ml_match_result is not None:
@@ -2066,25 +2319,65 @@ class AFMCallbacks:
                         f"dTheta={ml_remount['dtheta_deg']:+.2f} deg"
                     )
             else:
-                # CV fallback
+                # CV fallback: search de-rotated surface around expected position
                 fine_match = match_reference_template(
                     fine_search_surface, self.state.ref_template,
                     fine_search_target_x, fine_search_target_y,
                     half_range=self.state.relocation_fine_half_range_um,
                 )
-                fine_affine = estimate_local_affine_reference_match(
-                    fine_search_surface, self.state.ref_template,
-                    fine_search_target_x, fine_search_target_y,
-                    half_range=self.state.relocation_fine_half_range_um,
-                )
 
-            if fine_match is None and fine_affine is None:
+            # ── Fallback: if de-rotated surface search failed, try original surface ──
+            if fine_match is None and fine_to_current_matrix is not None:
+                self.log("De-rotated surface search failed, trying on original surface ...")
+                # Map ref position to current surface coordinates via the affine
+                raw_search_x, raw_search_y = transform_point(
+                    fine_to_current_matrix, self.state.ref_x, self.state.ref_y,
+                )
+                # Wider search on original (non-de-rotated) surface
+                fine_match = match_reference_template(
+                    self.state.surface_image, self.state.ref_template,
+                    raw_search_x, raw_search_y,
+                    half_range=self.state.relocation_fine_half_range_um * 2,
+                )
+                if fine_match is not None:
+                    self.log("Original surface search succeeded after de-rotated surface failed")
+                    # Update fine_search_surface to original for downstream verification
+                    fine_search_surface = self.state.surface_image
+                    fine_search_target_x = raw_search_x
+                    fine_search_target_y = raw_search_y
+                    if fine_match is not None:
+                        self.log(
+                            f"Template matched on original surface: "
+                            f"score={fine_match['score']:.3f}, gap={fine_match.get('score_gap', 0):.3f}"
+                        )
+
+            if fine_match is None:
                 self.log("AI relocation could not produce a usable reference match.")
                 self._enter_click_to_move_correction()
                 return
 
-            desired_x = float(fine_match["x"]) if fine_match is not None else float(fine_search_target_x)
-            desired_y = float(fine_match["y"]) if fine_match is not None else float(fine_search_target_y)
+            desired_x = float(fine_match["x"])
+            desired_y = float(fine_match["y"])
+
+            # -- Iterative refinement after ML coarse match --
+            for iteration in range(int(self.state.relocation_max_iterations)):
+                fine_match = match_reference_template(
+                    fine_search_surface,
+                    self.state.ref_template,
+                    desired_x,
+                    desired_y,
+                    half_range=self.state.relocation_fine_half_range_um,
+                )
+                if fine_match is not None:
+                    desired_x = float(fine_match["x"])
+                    desired_y = float(fine_match["y"])
+                    self.log(
+                        f"ML/CV refinement pass {iteration + 1}: "
+                        f"X={desired_x:.1f} um, Y={desired_y:.1f} um, "
+                        f"score={fine_match['score']:.3f}"
+                    )
+                else:
+                    break
 
             if fine_to_current_matrix is not None:
                 desired_current_x, desired_current_y = transform_point(

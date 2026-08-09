@@ -202,8 +202,9 @@ class MLPatternMatcher:
 # ════════════════════════════════════════════════════════════
 def deep_pair_features(extractor, reference_image, candidate_image):
     """
-    提取两幅图像的深度特征，返回拼接特征向量 (1024,) 和相关统计特征 (10,)
-    合并为 (1034,) 的总特征向量。
+    提取两幅图像的深度特征，返回拼接特征向量。
+    维度: ref_feat(512) + cand_feat(512) + diff_feat(512) + stat(5) = 1541
+    与 train_remount_5w.py 的训练特征完全一致。
     """
     ref_feat = extractor.extract(reference_image)
     cand_feat = extractor.extract(candidate_image)
@@ -520,3 +521,94 @@ def load_deep_remount_predictor(model_path, device=None):
         return None
     bundle = joblib.load(path)
     return MLTransformPredictor(model_bundle=bundle, device=device)
+
+
+# ════════════════════════════════════════════════════════════
+# 5w 大样本 Remount 预测器 (像素空间)
+# ════════════════════════════════════════════════════════════
+class MLTransformPredictor5W:
+    """基于 5w 大样本训练的 Remount 变换预测器。
+
+    与旧版 MLTransformPredictor 的区别：
+      - 旧版: 输出 dx_um/dy_um (微米空间), 用 std*3 归一化
+      - 新版: 输出 dx_px/dy_px (像素空间), 用 mean/std 归一化
+             调用方需自行乘以 scale_um_per_px 转为微米
+    """
+
+    def __init__(self, model_bundle=None, device=None):
+        self.extractor = DeepFeatureExtractor(device=device)
+        self.model = None
+        self.scale_factors = None
+        if model_bundle is not None:
+            self.model = model_bundle.get("model")
+            self.scale_factors = model_bundle.get("scale_factors", {})
+
+    def predict(self, reference_image, candidate_image):
+        """预测像素空间的相对偏移。
+
+        Returns:
+            dict: {"dx_px": float, "dy_px": float, "angle_deg": float} 或 None
+        """
+        if self.model is None:
+            return None
+        features = deep_pair_features(self.extractor, reference_image, candidate_image)
+        features = features.reshape(1, -1)
+        prediction = np.asarray(self.model.predict(features), dtype=float).reshape(-1)
+        if prediction.size < 3:
+            return None
+
+        dx_norm, dy_norm, angle_norm = (
+            float(prediction[0]),
+            float(prediction[1]),
+            float(prediction[2]),
+        )
+
+        if self.scale_factors:
+            # 反归一化: x_orig = x_norm * std + mean
+            dx_px = dx_norm * float(self.scale_factors.get("dx_std", 1.0)) + float(
+                self.scale_factors.get("dx_mean", 0.0)
+            )
+            dy_px = dy_norm * float(self.scale_factors.get("dy_std", 1.0)) + float(
+                self.scale_factors.get("dy_mean", 0.0)
+            )
+            angle_deg = angle_norm * float(self.scale_factors.get("angle_std", 1.0)) + float(
+                self.scale_factors.get("angle_mean", 0.0)
+            )
+        else:
+            dx_px, dy_px, angle_deg = dx_norm, dy_norm, angle_norm
+
+        return {"dx_px": dx_px, "dy_px": dy_px, "angle_deg": angle_deg}
+
+    def predict_um(self, reference_image, candidate_image, scale_x_um_per_px=1.0, scale_y_um_per_px=1.0):
+        """预测微米空间的相对偏移（兼容旧接口）。
+
+        Returns:
+            dict: {"dx_um": float, "dy_um": float, "dtheta_deg": float} 或 None
+        """
+        result = self.predict(reference_image, candidate_image)
+        if result is None:
+            print("[DEBUG 5w] predict() returned None")
+            return None
+        dx_um = result["dx_px"] * scale_x_um_per_px
+        dy_um = result["dy_px"] * scale_y_um_per_px
+        print(f"[DEBUG 5w] ref_img={reference_image.shape if hasattr(reference_image,'shape') else '?'}, "
+              f"cand_img={candidate_image.shape if hasattr(candidate_image,'shape') else '?'}")
+        print(f"[DEBUG 5w] RAW px: dx_px={result['dx_px']:+.1f}, dy_px={result['dy_px']:+.1f}, angle_deg={result['angle_deg']:+.2f}")
+        print(f"[DEBUG 5w] scale: x={scale_x_um_per_px:.4f} um/px, y={scale_y_um_per_px:.4f} um/px")
+        print(f"[DEBUG 5w] FINAL um: dx_um={dx_um:+.1f}, dy_um={dy_um:+.1f}, dtheta_deg={result['angle_deg']:+.2f}")
+        return {
+            "dx_um": dx_um,
+            "dy_um": dy_um,
+            "dtheta_deg": result["angle_deg"],
+        }
+
+
+def load_deep_remount_predictor_5w(model_path, device=None):
+    """加载 5w 大样本 remount 预测器，如果文件不存在返回 None"""
+    path = Path(model_path)
+    if not path.exists():
+        return None
+    bundle = joblib.load(path)
+    if bundle.get("model_type") != "deep_remount_predictor_5w":
+        return None
+    return MLTransformPredictor5W(model_bundle=bundle, device=device)

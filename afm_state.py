@@ -155,6 +155,7 @@ class AFMState:
         self.relocation_min_landmark_support = 2
         self.relocation_min_affine_confidence = 0.12
         self.relocation_min_affine_inliers = 12
+        self.force_ml_mode = False  # 强制使用5w ML模型（跳过ORB）
         self.relocation_fine_half_range_um = 700.0
         self.relocation_verify_half_range_um = 120.0
         self.relocation_max_iterations = 3
