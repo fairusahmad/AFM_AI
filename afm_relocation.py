@@ -521,10 +521,54 @@ def estimate_affine_transform(reference_image, current_image, max_features=600, 
         return None
 
     matrix = np.asarray(matrix, dtype=np.float32)
+    match_count = len(matches)
+
+    # --- Rotation direction verification ---
+    # RANSAC may converge to a rotation with the wrong sign (symmetric/repeated patterns).
+    # Build a flipped-rotation candidate and compare inlier counts on all matched pairs.
+    # Flip rotation sign: [[a,b,tx],[c,d,ty]] → [[a,c,tx],[b,d,ty]]
+    # because: cos(-θ)=cos(θ), -sin(-θ)=sin(θ), sin(-θ)=-sin(θ)
+    flip_matrix = np.array(
+        [
+            [matrix[0, 0], matrix[1, 0], matrix[0, 2]],
+            [matrix[0, 1], matrix[1, 1], matrix[1, 2]],
+        ],
+        dtype=np.float32,
+    )
+
+    def _count_inliers(m, src_pts, dst_pts, thresh=3.0):
+        transformed = cv2.transform(src_pts, m)
+        residuals = np.linalg.norm(
+            transformed.reshape(-1, 2) - dst_pts.reshape(-1, 2), axis=1
+        )
+        return int(np.sum(residuals < thresh))
+
+    orig_all = _count_inliers(matrix, src, dst)
+    flip_all = _count_inliers(flip_matrix, src, dst)
+    margin = max(2, int(match_count * 0.05))
+
+    if flip_all >= orig_all + margin:
+        # Refine translation for the flipped rotation using median residual
+        transformed = cv2.transform(src, flip_matrix).reshape(-1, 2)
+        residuals = dst.reshape(-1, 2) - transformed
+        inlier_mask = np.linalg.norm(residuals, axis=1) < 3.0
+        if np.sum(inlier_mask) >= 4:
+            median_dx = float(np.median(residuals[inlier_mask, 0]))
+            median_dy = float(np.median(residuals[inlier_mask, 1]))
+            flip_matrix[0, 2] += median_dx
+            flip_matrix[1, 2] += median_dy
+            flip_all = _count_inliers(flip_matrix, src, dst)
+
+        if flip_all > orig_all:
+            matrix = flip_matrix
+            inlier_count = flip_all
+        else:
+            inlier_count = int(np.sum(inliers)) if inliers is not None else 0
+    else:
+        inlier_count = int(np.sum(inliers)) if inliers is not None else 0
+
     rotation_rad = float(np.arctan2(matrix[1, 0], matrix[0, 0]))
     scale = float(np.hypot(matrix[0, 0], matrix[1, 0]))
-    inlier_count = int(np.sum(inliers)) if inliers is not None else 0
-    match_count = len(matches)
     confidence = 0.0 if match_count == 0 else float(np.clip(inlier_count / max(match_count, 1), 0.0, 1.0))
     return {
         "matrix": matrix,

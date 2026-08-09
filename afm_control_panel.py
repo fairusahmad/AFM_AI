@@ -1337,6 +1337,12 @@ bind_logged_button("pi", "Toggle PI Compensation", callbacks.toggle_pi)
 bind_logged_button("auto", "Start Auto Scan", callbacks.start_auto_scan)
 bind_logged_button("clear", "Clear Path", callbacks.clear_trails)
 
+def _toggle_ml_mode(event=None):
+    if event is not None and event.key != 'm':
+        return
+    state.force_ml_mode = not state.force_ml_mode
+    log_message(f"[ML Mode] {'ON — ML narrows NCC sweep (+-4 deg)' if state.force_ml_mode else 'OFF — NCC full sweep (+-10 deg)'}")
+
 bind_logged_button("save_ref", "Save Region Memory", callbacks.save_reference)
 bind_logged_button("remove_sample", "Remount Sample", callbacks.remove_sample)
 bind_logged_button("auto_origin", "Pick Local Origin", callbacks.auto_origin_unsupervised)
@@ -1434,6 +1440,8 @@ log_message("Saved site memory includes the named origin, scan position, current
 log_message("After replacement, recovery follows a coarse-to-fine path: low-mag localization, regional refinement with landmarks, final high-mag verification, then acceptance only if confidence passes.")
 log_message("Auto Origin is a local landmark helper in the current viewport. Find Labeled Origin is a supervised full-sample search for a previously defined origin pattern.")
 log_message("High-mag pattern recognition now uses the camera-visible view, with cantilever-body occlusion applied so hidden texture under the probe is not used for matching.")
+log_message("Press 'M' key to toggle ML mode (5w model vs ORB+RANSAC for coarse localization).")
+fig.canvas.mpl_connect("key_press_event", _toggle_ml_mode)
 log_message("Named regions: Viewport, FOV, Relocation Trace Dock, Navigation Dock, Motion Dock, Status Dock, Relocation Dock, Utility Dock.")
 log_message("Suggested order: load image at low mag -> move to the region of interest -> zoom in to the scan site -> set the named origin -> save site memory -> remove and replace sample -> optionally guide near the old region -> run recovery and verification.")
 if runtime_default_config.get("autoload"):

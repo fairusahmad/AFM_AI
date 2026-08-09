@@ -35,6 +35,12 @@ artefact_detector/exp*/weights/*.pt   # 可选：不提交模型文件（过大�
 # Logs
 *.log
 
+# Temp files
+temp_*.csv
+_clipboard_temp.txt
+_fix_emoji.py
+_replace_func.py
+
 # Codewhale agent metadata
 .codewhale/
 
