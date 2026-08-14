@@ -673,6 +673,15 @@ def build_site_memory(state, stage_history=None):
         tip_y_um=float(getattr(state, "probe_tip_y", state.y + state.fov_height / 2.0)),
     )
 
+    reference_tip_x = float(getattr(state, "probe_tip_x", state.x + state.fov_width / 2.0))
+    reference_tip_y = float(getattr(state, "probe_tip_y", state.y + state.fov_height / 2.0))
+    coarse_zoom_level = float(min(getattr(state, "zoom_levels", (state.current_zoom_level,))))
+    coarse_fov_width_um, coarse_fov_height_um = state.get_fov_for_zoom_level(coarse_zoom_level)
+    coarse_max_x = max(float(state.width_um) - float(coarse_fov_width_um), 0.0)
+    coarse_max_y = max(float(state.height_um) - float(coarse_fov_height_um), 0.0)
+    coarse_top_left_x = float(np.clip(reference_tip_x - float(coarse_fov_width_um) * 0.5, 0.0, coarse_max_x))
+    coarse_top_left_y = float(np.clip(reference_tip_y - float(coarse_fov_height_um) * 0.5, 0.0, coarse_max_y))
+
     target_center_x = float(state.target_x + state.fov_width / 2.0)
     target_center_y = float(state.target_y + state.fov_height / 2.0)
     site_memory = {
@@ -696,12 +705,20 @@ def build_site_memory(state, stage_history=None):
             "x_um": float(state.x + state.fov_width / 2.0),
             "y_um": float(state.y + state.fov_height / 2.0),
         },
+        "coarse_reference_top_left": {"x_um": coarse_top_left_x, "y_um": coarse_top_left_y},
+        "coarse_reference_center": {
+            "x_um": float(coarse_top_left_x + coarse_fov_width_um / 2.0),
+            "y_um": float(coarse_top_left_y + coarse_fov_height_um / 2.0),
+        },
         "target_center": {"x_um": target_center_x, "y_um": target_center_y},
         "reference_tip": {
-            "x_um": float(getattr(state, "probe_tip_x", state.x + state.fov_width / 2.0)),
-            "y_um": float(getattr(state, "probe_tip_y", state.y + state.fov_height / 2.0)),
+            "x_um": reference_tip_x,
+            "y_um": reference_tip_y,
         },
+        "coarse_fov_size_um": {"width_um": float(coarse_fov_width_um), "height_um": float(coarse_fov_height_um)},
         "fov_size_um": {"width_um": float(state.fov_width), "height_um": float(state.fov_height)},
+        "coarse_zoom_level": coarse_zoom_level,
+        "final_zoom_level": float(state.current_zoom_level),
         "zoom_level": float(state.current_zoom_level),
         "magnification": float(state.get_current_objective_magnification()),
         "tilt_angle_deg": 0.0,

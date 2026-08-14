@@ -509,9 +509,13 @@ button_objects, radio_step, status_text, activity_text, dock_manager = setup_das
 relocation_panel = next((panel for panel in dock_manager.panels if panel.panel_id == "relocation"), None)
 status_panel = next((panel for panel in dock_manager.panels if panel.panel_id == "status_activity"), None)
 trace_panel = next((panel for panel in dock_manager.panels if panel.panel_id == "trace"), None)
-status_dock = None if status_panel is None else StatusTextDock(fig, manager, status_panel, status_text)
-trace_dock = None if trace_panel is None else TraceTextDock(fig, manager, trace_panel, activity_text)
+using_external_dock_window = bool(getattr(dock_manager, "uses_external_window", False))
+status_dock = None if using_external_dock_window or status_panel is None else StatusTextDock(fig, manager, status_panel, status_text)
+trace_dock = None if using_external_dock_window or trace_panel is None else TraceTextDock(fig, manager, trace_panel, activity_text)
 relocation_help_text = None if relocation_panel is None else relocation_panel.children_by_role["relocation_help"]["artist"]
+relocation_status_text = None if relocation_panel is None else relocation_panel.children_by_role.get("relocation_status_text", {}).get("artist")
+relocation_overview_image = None if relocation_panel is None else relocation_panel.children_by_role.get("relocation_overview_image", {}).get("artist")
+relocation_reference_image = None if relocation_panel is None else relocation_panel.children_by_role.get("relocation_reference_image", {}).get("artist")
 relocation_tooltips = {
     "save_ref": "Save Region: store the current low-mag context, high-mag template, zoom context, and landmark memory for later recovery.",
     "remove_sample": "Remount: simulate taking the sample out and putting it back with shift only.",
@@ -771,6 +775,136 @@ def extract_landmark_outline(match, source_view):
     return abs_x, abs_y
 
 
+def _format_optional_path(value):
+    if not value:
+        return "not saved"
+    try:
+        return str(Path(value))
+    except Exception:
+        return str(value)
+
+
+def _format_image_shape(image):
+    if image is None or getattr(image, "shape", None) is None:
+        return "not stored"
+    if len(image.shape) >= 2:
+        return f"{int(image.shape[1])} x {int(image.shape[0])} px"
+    return "stored"
+
+
+def _progress_label(done, waiting_label="[WAIT]"):
+    return "[DONE]" if done else waiting_label
+
+
+def build_relocation_progress_lines():
+    site_memory = state.site_memory or {}
+    overview = site_memory.get("overview") or {}
+    reference_template = site_memory.get("reference_template")
+    origin_template = site_memory.get("origin_template")
+    highmag_landmarks = site_memory.get("highmag_landmarks") or []
+    lowmag_landmarks = site_memory.get("lowmag_landmarks") or []
+    verification = (state.last_relocation_report or {}).get("verification") or {}
+    affine_report = (
+        (state.last_relocation_report or {}).get("affine")
+        or state.last_affine_transform_report
+        or {}
+    )
+    fine_match = (state.last_relocation_report or {}).get("fine") or {}
+    saved_dir = _format_optional_path(state.last_saved_site_dir)
+    coarse_zoom = site_memory.get("coarse_zoom_level")
+    final_zoom = site_memory.get("final_zoom_level", site_memory.get("zoom_level"))
+    overview_image = overview.get("image")
+    origin_info = site_memory.get("origin")
+    sample_ready = bool(state.sample_path or state.sample_source)
+    site_saved = bool(site_memory)
+    remounted = bool(state.sample_removed or abs(state.simulated_sample_shift_x_um) > 1e-6 or abs(state.simulated_sample_shift_y_um) > 1e-6)
+    coarse_ready = bool(affine_report or (state.last_relocation_report or {}).get("coarse"))
+    fine_ready = bool(fine_match)
+    verified = bool(verification.get("verified"))
+    awaiting_click = bool(state.ai_relocate_awaiting_click)
+
+    lines = [
+        "Storage",
+        f"Site Memory ID: {site_memory.get('site_id', 'not saved')}",
+        f"Saved Folder: {saved_dir}",
+        f"Captured At: {site_memory.get('captured_at', 'not saved')}",
+        f"Reference Template: {_format_image_shape(reference_template)}",
+        f"Low-Mag Overview: {_format_image_shape(overview_image)}",
+        f"Origin Template: {_format_image_shape(origin_template)}",
+        f"Low-Mag Landmarks: {len(lowmag_landmarks)}",
+        f"High-Mag Landmarks: {len(highmag_landmarks)}",
+        f"Saved Zooms: coarse={coarse_zoom if coarse_zoom is not None else 'n/a'}x  final={final_zoom if final_zoom is not None else 'n/a'}x",
+        f"Saved Origin: {origin_info.get('label', 'not saved') if origin_info else 'not saved'}",
+        "",
+        "Progress",
+        f"{_progress_label(sample_ready)} Sample image loaded",
+        f"{_progress_label(state.origin_defined or origin_info is not None)} Named origin available",
+        f"{_progress_label(site_saved)} Site memory captured",
+        f"{_progress_label(reference_template is not None)} Reference image stored",
+        f"{_progress_label(overview_image is not None)} Low-mag overview stored",
+        f"{_progress_label(len(lowmag_landmarks) > 0)} Coarse landmarks stored",
+        f"{_progress_label(len(highmag_landmarks) > 0)} Fine landmarks stored",
+        f"{_progress_label(remounted)} Sample remount simulated",
+        f"{_progress_label(coarse_ready)} Coarse relocation estimated",
+        f"{_progress_label(fine_ready)} Fine reference match found",
+        f"{_progress_label(verified, waiting_label='[FAIL]')} Final verification accepted",
+    ]
+
+    if awaiting_click:
+        lines.append("[WAIT] Manual click correction requested")
+    if fine_match:
+        lines.append(
+            f"Fine Match Score: {fine_match.get('score', 0.0):.3f}  gap={fine_match.get('score_gap', 0.0):.3f}"
+        )
+    if affine_report:
+        lines.append(
+            f"Affine Estimate: dTheta={affine_report.get('rotation_deg', 0.0):+.2f} deg  conf={affine_report.get('confidence', 0.0):.3f}"
+        )
+    if verification:
+        lines.append(
+            f"Verification: score={verification.get('reference_score', 0.0):.3f}  gap={verification.get('reference_score_gap', 0.0):.3f}"
+        )
+        landmark_consensus = verification.get("landmark_consensus") or {}
+        if landmark_consensus:
+            lines.append(
+                f"Landmark Verify: support={landmark_consensus.get('support_count', 0)}  conf={landmark_consensus.get('confidence', 0.0):.3f}"
+            )
+        geometry_check = verification.get("geometry_check") or {}
+        if geometry_check:
+            lines.append(
+                f"Geometry Check: matched={geometry_check.get('matched_count', 0)}  conf={geometry_check.get('geometry_confidence', 0.0):.3f}"
+            )
+    lines.append(
+        f"Remount Shift: dX={state.simulated_sample_shift_x_um:+.1f}  dY={state.simulated_sample_shift_y_um:+.1f}  dTheta={state.simulated_sample_rotation_deg:+.2f} deg"
+    )
+    return lines
+
+
+def refresh_relocation_image_previews(site_memory):
+    if relocation_overview_image is not None:
+        overview = (site_memory or {}).get("overview") or {}
+        overview_image = overview.get("image")
+        overview_scale_x = overview.get("scale_x_um_per_px")
+        overview_scale_y = overview.get("scale_y_um_per_px")
+        if overview_image is not None:
+            caption = "Low-mag overview"
+            if overview_scale_x is not None and overview_scale_y is not None:
+                caption += f" ({overview_scale_x:.2f} x {overview_scale_y:.2f} um/px)"
+            relocation_overview_image.set_image(overview_image, caption=caption)
+        else:
+            relocation_overview_image.clear(caption="Low-mag overview")
+    if relocation_reference_image is not None:
+        reference_template = (site_memory or {}).get("reference_template")
+        final_zoom = (site_memory or {}).get("final_zoom_level", (site_memory or {}).get("zoom_level"))
+        if reference_template is not None:
+            caption = "High-mag reference"
+            if final_zoom is not None:
+                caption += f" ({float(final_zoom):.2f}x)"
+            relocation_reference_image.set_image(reference_template, caption=caption)
+        else:
+            relocation_reference_image.clear(caption="High-mag reference")
+
+
 def refresh_status_panel():
     tip_x, tip_y = get_tip_wrapper()
     target_center_x, target_center_y = callbacks.get_target_center()
@@ -839,6 +973,7 @@ def refresh_status_panel():
             hud_landmark_line += f"  angle err={hud_landmark_report['mean_angle_error_deg']:.1f} deg"
     else:
         hud_landmark_line = "HUD Landmark Matches: not active"
+    relocation_progress_lines = build_relocation_progress_lines()
 
     entries = [
         {"text": "Surface And Camera", "is_heading": True},
@@ -1003,6 +1138,9 @@ def refresh_status_panel():
         status_dock.set_entries(entries)
     else:
         status_text.set_text("\n".join(entry["text"] for entry in entries))
+    if relocation_status_text is not None:
+        relocation_status_text.set_text("\n".join(relocation_progress_lines))
+    refresh_relocation_image_previews(site_memory)
     update_origin_overlay()
     update_tip_overlay()
 
@@ -1012,7 +1150,10 @@ def log_message(message):
     if trace_dock is not None:
         trace_dock.append(message)
     elif activity_text is not None:
-        activity_text.set_text(str(message))
+        if hasattr(activity_text, "append"):
+            activity_text.append(str(message))
+        else:
+            activity_text.set_text(str(message))
     refresh_status_panel()
     fig.canvas.draw_idle()
 
@@ -1036,7 +1177,7 @@ def update_origin_overlay():
 
 
 def update_relocation_hover_help(event):
-    if relocation_help_text is None:
+    if relocation_help_text is None or using_external_dock_window:
         return
     hovered_key = None
     for key, tooltip in relocation_tooltips.items():
@@ -1398,6 +1539,7 @@ animation = AFMAnimation(
     refresh_status_panel,
     callbacks.update_probe_visuals,
 )
+callbacks.set_animation_step_callback(lambda: animation.update(None))
 ani = FuncAnimation(fig, animation.update, interval=state.animation_interval_ms, cache_frame_data=False)
 
 is_closing = False

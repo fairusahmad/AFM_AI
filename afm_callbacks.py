@@ -100,6 +100,7 @@ class AFMCallbacks:
         self.log_callback = None
         self.status_callback = None
         self.persist_default_callback = None
+        self.animation_step_callback = None
 
         self.artefact_detector = None
         try:
@@ -140,6 +141,7 @@ class AFMCallbacks:
         self.deep_classifier = None
         self.deep_regressor = None
         self.deep_regressor_is_5w = False
+        self._logged_5w_overview_skip = False
         self._ml_ready = False
         try:
             self.deep_feature_extractor = DeepFeatureExtractor()
@@ -198,6 +200,9 @@ class AFMCallbacks:
 
     def set_persist_default_callback(self, callback):
         self.persist_default_callback = callback
+
+    def set_animation_step_callback(self, callback):
+        self.animation_step_callback = callback
 
     def log(self, message):
         if self.log_callback is not None:
@@ -283,8 +288,26 @@ class AFMCallbacks:
     def _wait_for_zoom_complete(self, timeout_sec=2.0, poll_interval=0.05):
         """Block until the current zoom animation finishes, or timeout."""
         import time as _time
+        if self.animation_step_callback is not None:
+            max_iterations = max(int(self.state.zoom_steps) + 5, 25)
+            for _ in range(max_iterations):
+                if not self.state.zooming:
+                    break
+                self.animation_step_callback()
+            if self.state.zooming:
+                self.log("Zoom wait timed out — forcing zoom completion")
+                self.state.current_zoom_level = float(self.state.target_zoom_level)
+                self.state.fov_width, self.state.fov_height = self.state.get_fov_for_zoom_level(self.state.current_zoom_level)
+                self.state.zooming = False
+                self.state.zoom_progress = 0
+            self._refresh_current_view()
+            return
         start = _time.time()
         while self.state.zooming:
+            self.fig.canvas.draw_idle()
+            flush_events = getattr(self.fig.canvas, "flush_events", None)
+            if callable(flush_events):
+                flush_events()
             if _time.time() - start > timeout_sec:
                 self.log("Zoom wait timed out — forcing zoom completion")
                 self.state.current_zoom_level = float(self.state.target_zoom_level)
@@ -324,10 +347,27 @@ class AFMCallbacks:
         self.state.probe_tip_x = float(self.state.x + self.state.fov_width * self.PROBE_TIP_REL_X)
         self.state.probe_tip_y = float(self.state.y + self.state.fov_height * self.PROBE_TIP_REL_Y)
 
+    def _reset_view_to_zoom(self, zoom_level, center_x_um=None, center_y_um=None):
+        zoom_level = float(self.state.zoom_levels[self._get_zoom_level_index(zoom_level)])
+        center_x_um = float(self.state.probe_tip_x if center_x_um is None else center_x_um)
+        center_y_um = float(self.state.probe_tip_y if center_y_um is None else center_y_um)
+        self.state.zooming = False
+        self.state.zoom_progress = 0
+        self.state.zoom_direction = 0
+        self.state.current_zoom_level = zoom_level
+        self.state.target_zoom_level = zoom_level
+        self.state.fov_width, self.state.fov_height = self.state.get_fov_for_zoom_level(zoom_level)
+        target_x = float(center_x_um - self.state.fov_width * self.PROBE_TIP_REL_X)
+        target_y = float(center_y_um - self.state.fov_height * self.PROBE_TIP_REL_Y)
+        target_x, target_y = self._clamp_to_stage_margin(target_x, target_y)
+        self.state.x = target_x
+        self.state.y = target_y
+        self.state.target_x = target_x
+        self.state.target_y = target_y
+        self._set_probe_tip_to_view_center()
+
     def _set_random_start_view(self):
-        self.state.current_zoom_level = 0.25
-        self.state.target_zoom_level = 0.25
-        self.state.fov_width, self.state.fov_height = self.state.get_fov_for_zoom_level(self.state.current_zoom_level)
+        self._reset_view_to_zoom(min(self.state.zoom_levels), center_x_um=self.state.x + self.state.fov_width * 0.5, center_y_um=self.state.y + self.state.fov_height * 0.5)
         max_x = max(float(self.state.width_um) - float(self.state.fov_width), 0.0)
         max_y = max(float(self.state.height_um) - float(self.state.fov_height), 0.0)
         self.state.x = float(random.uniform(0.0, max_x)) if max_x > 0.0 else 0.0
@@ -967,8 +1007,7 @@ class AFMCallbacks:
             self.state.origin_x = float(origin_info.get("x_um", self.state.origin_x))
             self.state.origin_y = float(origin_info.get("y_um", self.state.origin_y))
         self.state.origin_template = site_memory.get("origin_template")
-        # Page 3: restore the zoom_level that was saved with this site memory
-        saved_zoom = site_memory.get("zoom_level")
+        saved_zoom = site_memory.get("final_zoom_level", site_memory.get("zoom_level"))
         if saved_zoom is not None:
             self._begin_quantized_zoom(float(saved_zoom))
             self.log(f"Restored zoom level to {float(saved_zoom):.2f}x from site memory")
@@ -1215,8 +1254,6 @@ class AFMCallbacks:
                 borderType=cv2.BORDER_CONSTANT, value=fill_val,
             )
 
-        scaled_top_left_x = top_left_x * verify_scale
-        scaled_top_left_y = top_left_y * verify_scale
         verify_match = match_reference_template(
             surface_image,
             self.state.ref_template,
@@ -1302,7 +1339,31 @@ class AFMCallbacks:
             self.state.ref_template,
             candidate_patch,
         )
-        same_site_ok = same_site_probability is None or same_site_probability >= 0.50
+        strong_match_override = False
+        strong_match_reason = None
+        if same_site_probability is not None and same_site_probability < 0.50:
+            strong_reference_match = (
+                verify_match["score"] >= 0.75
+                and verify_match.get("score_gap", 0.0) >= max(self.state.relocation_min_score_gap, 0.05)
+            )
+            strong_landmark_consensus = (
+                landmark_consensus is not None
+                and landmark_consensus.get("support_count", 0) >= max(self.state.relocation_min_landmark_support, 4)
+                and landmark_consensus.get("confidence", 0.0) >= 0.55
+            )
+            strong_geometry_check = (
+                geometry_check is not None
+                and geometry_check.get("matched_count", 0) >= max(self.state.relocation_min_landmark_support, 4)
+                and geometry_check.get("geometry_confidence", 0.0) >= 0.55
+            )
+            if strong_reference_match and (strong_landmark_consensus or strong_geometry_check):
+                strong_match_override = True
+                strong_match_reason = "strong_template_plus_landmarks"
+        same_site_ok = (
+            same_site_probability is None
+            or same_site_probability >= 0.50
+            or strong_match_override
+        )
         return {
             "verified": bool(match_ok and landmark_ok and geometry_ok and same_site_ok),
             "reference_score": float(verify_match["score"]),
@@ -1313,6 +1374,8 @@ class AFMCallbacks:
             "landmark_consensus": landmark_consensus,
             "geometry_check": geometry_check,
             "same_site_probability": same_site_probability,
+            "same_site_override_used": bool(strong_match_override),
+            "same_site_override_reason": strong_match_reason,
         }
 
     def set_step(self, step):
@@ -1694,11 +1757,12 @@ class AFMCallbacks:
     def remove_sample(self, event):
         """Simulate sample removal by translating the sample relative to the stage."""
         self.state.sample_removed = True
-        dx = random.uniform(-500, 500)
-        dy = random.uniform(-500, 500)
+        remount_center_x = float(self.state.probe_tip_x)
+        remount_center_y = float(self.state.probe_tip_y)
+        dx = random.uniform(-200, 200)
+        dy = random.uniform(-200, 200)
         self._apply_simulated_sample_remount(dx, dy, 0.0)
-        self.state.target_x = float(self.state.x)
-        self.state.target_y = float(self.state.y)
+        self._reset_view_to_zoom(min(self.state.zoom_levels), center_x_um=remount_center_x, center_y_um=remount_center_y)
         if self.state.pi_mode:
             self.stage.reset(self.state.x, self.state.y)
             self.stage.cmd_x = self.state.x
@@ -1707,7 +1771,7 @@ class AFMCallbacks:
         self._refresh_current_view()
         self.log(
             "Sample removal simulation: sample remounted relative to the stage by "
-            f"dX={dx:+.1f} um, dY={dy:+.1f} um"
+            f"dX={dx:+.1f} um, dY={dy:+.1f} um at zoom {self.state.current_zoom_level:.2f}x"
         )
         if self.state.origin_template is not None:
             self.log("Stored origin template kept for later re-identification after remount.")
@@ -1971,7 +2035,7 @@ class AFMCallbacks:
             self.state.last_relocation_report = {
                 "affine": affine_report,
                 "coarse": coarse_result,
-                "fine_affine": fine_affine,
+                "fine_affine": None,
                 "fine": fine_match,
                 "predicted_current_top_left": {"x_um": float(desired_current_x), "y_um": float(desired_current_y)},
                 "verification": verification,
@@ -2111,15 +2175,19 @@ class AFMCallbacks:
         """
         if self.deep_regressor is None:
             return None
-        try:
-            if self.deep_regressor_is_5w:
-                result = self.deep_regressor.predict_um(
-                    ref_overview_image, cur_overview_image,
-                    scale_x_um_per_px=scale_x_um_per_px,
-                    scale_y_um_per_px=scale_y_um_per_px,
+        if self.deep_regressor_is_5w:
+            # The 5w regressor is trained on reference_template patch pairs in pixel
+            # space, not low-magnification overview images. Using it here causes
+            # predictions that look valid offline but fail inside the program.
+            if not self._logged_5w_overview_skip:
+                self.log(
+                    "Skipping overview ML remount prediction: the 5w model is "
+                    "template-trained and is kept only for template-based rotation hints."
                 )
-            else:
-                result = self.deep_regressor.predict(ref_overview_image, cur_overview_image)
+                self._logged_5w_overview_skip = True
+            return None
+        try:
+            result = self.deep_regressor.predict(ref_overview_image, cur_overview_image)
             return result
         except Exception as e:
             self.log(f"ML remount prediction failed: {e}")
@@ -2143,14 +2211,11 @@ class AFMCallbacks:
     # Page 2 – AI Recall & Recover (PPT slide 2)
     # ------------------------------------------------------------------
     def ai_recall_and_recover(self, event):
-        """One-button AI relocation: load last site_memory, restore zoom,
-        run coarse-to-fine AI recognition, move cantilever, verify.
-        On verification failure, enter click-to-move correction mode."""
+        """Two-stage AI relocation: low-mag coarse recall first, then high-mag refinement."""
         if not self._begin_action("ai_recall", "AI recall is already running"):
             return
         try:
             self.log("===== AI Recall & Recover =====")
-            # 1. Machine recall the last measurement region
             if self.state.site_memory is None:
                 self._try_load_latest_site_memory()
             if self.state.site_memory is not None and self.state.ref_template is None:
@@ -2159,32 +2224,37 @@ class AFMCallbacks:
                 self.log("No saved site memory found. Save a reference region first (1. Save Region).")
                 return
 
-            # Wait for zoom restoration to complete before recognition
             self._wait_for_zoom_complete()
-
             site_memory = self.state.site_memory or {}
-            self.log("Site memory loaded. Running AI recognition...")
+            final_zoom = float(site_memory.get("final_zoom_level", site_memory.get("zoom_level", self.state.current_zoom_level)))
+            coarse_zoom = float(site_memory.get("coarse_zoom_level", min(self.state.zoom_levels)))
+            coarse_reference_top_left = site_memory.get("coarse_reference_top_left") or site_memory.get("reference_top_left") or {}
+            final_reference_top_left = site_memory.get("reference_top_left") or {}
 
-            # 2. AI recognize the current surrounding pattern:
-            #    estimate rotation angle and distance from origin
+            if not np.isclose(float(self.state.current_zoom_level), coarse_zoom):
+                self._begin_quantized_zoom(coarse_zoom)
+                self.log(f"Stage 1/3: returning to low magnification at {coarse_zoom:.2f}x")
+                self._wait_for_zoom_complete()
+            else:
+                self.log(f"Stage 1/3: already at low magnification {coarse_zoom:.2f}x")
+
+            self.log("Running low-magnification coarse recall...")
+
             affine_report = self._estimate_coarse_affine_transform()
             if affine_report is not None and affine_report["confidence"] >= self.state.relocation_min_affine_confidence:
                 self.log(
-                    "AI pattern recognition: "
+                    "Low-mag pattern recognition: "
                     f"rotation={affine_report['rotation_deg']:+.2f} deg, "
                     f"inliers={affine_report['inlier_count']}/{affine_report['match_count']}, "
                     f"confidence={affine_report['confidence']:.3f}"
                 )
             else:
                 self.log(
-                    "AI pattern recognition confidence low "
+                    "Low-mag pattern recognition confidence low "
                     f"({affine_report['confidence']:.3f if affine_report else 'N/A'}), "
                     "proceeding with landmark-only fallback."
                 )
 
-            # 3. Run the existing coarse-to-fine relocation (without moving yet)
-            #    We reuse the relocate logic but intercept the verification result
-            self.log("Computing relocation offset...")
             coarse_target_x = float(self.state.x)
             coarse_target_y = float(self.state.y)
             coarse_result = None
@@ -2193,11 +2263,12 @@ class AFMCallbacks:
             fine_search_target_y = float(self.state.y)
             fine_to_current_matrix = None
 
-            if site_memory.get("reference_top_left"):
-                coarse_target_x = float(site_memory["reference_top_left"]["x_um"])
-                coarse_target_y = float(site_memory["reference_top_left"]["y_um"])
-                fine_search_target_x = coarse_target_x
-                fine_search_target_y = coarse_target_y
+            if coarse_reference_top_left:
+                coarse_target_x = float(coarse_reference_top_left.get("x_um", coarse_target_x))
+                coarse_target_y = float(coarse_reference_top_left.get("y_um", coarse_target_y))
+            if final_reference_top_left:
+                fine_search_target_x = float(final_reference_top_left.get("x_um", fine_search_target_x))
+                fine_search_target_y = float(final_reference_top_left.get("y_um", fine_search_target_y))
 
             if affine_report is not None and affine_report["confidence"] >= self.state.relocation_min_affine_confidence:
                 fine_to_current_matrix = affine_report["full_matrix"]
@@ -2209,7 +2280,7 @@ class AFMCallbacks:
                 fine_search_target_x = float(self.state.ref_x)
                 fine_search_target_y = float(self.state.ref_y)
                 coarse_target_x, coarse_target_y = transform_point(
-                    fine_to_current_matrix, self.state.ref_x, self.state.ref_y,
+                    fine_to_current_matrix, coarse_target_x, coarse_target_y,
                 )
 
             if fine_to_current_matrix is None and site_memory.get("lowmag_landmarks"):
@@ -2225,10 +2296,11 @@ class AFMCallbacks:
                         max_residual_um=100.0,
                     )
                     if coarse_result is not None:
+                        coarse_target_x = float(coarse_result["offset_x_um"] + coarse_target_x)
+                        coarse_target_y = float(coarse_result["offset_y_um"] + coarse_target_y)
                         fine_search_target_x = float(coarse_result["offset_x_um"] + self.state.ref_x)
                         fine_search_target_y = float(coarse_result["offset_y_um"] + self.state.ref_y)
 
-            # ── ML Remount fallback for coarse positioning ──
             ml_remount = None
             if fine_to_current_matrix is None and coarse_result is None:
                 cur_overview = build_overview(self.state.surface_image)
@@ -2240,6 +2312,8 @@ class AFMCallbacks:
                         scale_y_um_per_px=cur_overview.get("scale_y_um_per_px", 1.0),
                     )
                     if ml_remount is not None:
+                        coarse_target_x = float(coarse_target_x + ml_remount["dx_um"])
+                        coarse_target_y = float(coarse_target_y + ml_remount["dy_um"])
                         fine_search_target_x = float(self.state.ref_x + ml_remount["dx_um"])
                         fine_search_target_y = float(self.state.ref_y + ml_remount["dy_um"])
                         self.log(
@@ -2251,13 +2325,27 @@ class AFMCallbacks:
                 else:
                     ml_remount = None
 
-            # ── Fine relocation: ML path first, fall back to CV ──
+            coarse_cmd_x, coarse_cmd_y = self._clamp_to_stage_margin(coarse_target_x, coarse_target_y)
+            self._jump_view_to_target(coarse_cmd_x, coarse_cmd_y)
+            self.log(
+                f"Stage 2/3: low-mag recall positioned viewport near the saved region at "
+                f"({coarse_cmd_x:.1f}, {coarse_cmd_y:.1f})"
+            )
+
+            if not np.isclose(float(self.state.current_zoom_level), final_zoom):
+                self._begin_quantized_zoom(final_zoom)
+                self.log(f"Stage 3/3: returning to saved final zoom {final_zoom:.2f}x for fine relocation")
+                self._wait_for_zoom_complete()
+            else:
+                self.log(f"Stage 3/3: already at saved final zoom {final_zoom:.2f}x")
+
+            self.log("Running high-magnification refinement...")
+
             ml_match_result = self._ml_recognize_pattern(
                 fine_search_surface, self.state.ref_template,
                 center_x=fine_search_target_x, center_y=fine_search_target_y,
                 half_range_um=self.state.relocation_fine_half_range_um * 2,
             )
-            # If coarse positioning already succeeded (affine/landmarks), still try ML remount for logging
             if ml_remount is None:
                 cur_overview = build_overview(self.state.surface_image)
                 if cur_overview is not None and site_memory.get("overview", {}).get("image") is not None:
@@ -2287,21 +2375,17 @@ class AFMCallbacks:
                         f"dTheta={ml_remount['dtheta_deg']:+.2f} deg"
                     )
             else:
-                # CV fallback: search de-rotated surface around expected position
                 fine_match = match_reference_template(
                     fine_search_surface, self.state.ref_template,
                     fine_search_target_x, fine_search_target_y,
                     half_range=self.state.relocation_fine_half_range_um,
                 )
 
-            # ── Fallback: if de-rotated surface search failed, try original surface ──
             if fine_match is None and fine_to_current_matrix is not None:
                 self.log("De-rotated surface search failed, trying on original surface ...")
-                # Map ref position to current surface coordinates via the affine
                 raw_search_x, raw_search_y = transform_point(
                     fine_to_current_matrix, self.state.ref_x, self.state.ref_y,
                 )
-                # Wider search on original (non-de-rotated) surface
                 fine_match = match_reference_template(
                     self.state.surface_image, self.state.ref_template,
                     raw_search_x, raw_search_y,
@@ -2309,7 +2393,6 @@ class AFMCallbacks:
                 )
                 if fine_match is not None:
                     self.log("Original surface search succeeded after de-rotated surface failed")
-                    # Update fine_search_surface to original for downstream verification
                     fine_search_surface = self.state.surface_image
                     fine_search_target_x = raw_search_x
                     fine_search_target_y = raw_search_y
@@ -2327,7 +2410,6 @@ class AFMCallbacks:
             desired_x = float(fine_match["x"])
             desired_y = float(fine_match["y"])
 
-            # -- Iterative refinement after ML coarse match --
             for iteration in range(int(self.state.relocation_max_iterations)):
                 fine_match = match_reference_template(
                     fine_search_surface,
@@ -2355,13 +2437,11 @@ class AFMCallbacks:
                 desired_current_x = desired_x
                 desired_current_y = desired_y
 
-            # 4. Verify: ML verification + traditional verification
             verification = self._verify_relocation(
                 desired_x, desired_y,
                 surface_image=fine_search_surface,
                 site_memory=site_memory,
             )
-            # ML site verification as additional check
             ml_verified, ml_prob = self._ml_verify_same_site(
                 self.state.ref_template,
                 fine_search_surface[
@@ -2386,7 +2466,7 @@ class AFMCallbacks:
             self.state.last_relocation_report = {
                 "affine": affine_report,
                 "coarse": coarse_result,
-                "fine_affine": fine_affine,
+                "fine_affine": None,
                 "fine": fine_match,
                 "ml_used": ml_used,
                 "ml_remount": ml_remount,
@@ -2395,7 +2475,6 @@ class AFMCallbacks:
             }
 
             if final_verified:
-                # Move cantilever to the recovered position
                 cmd_x, cmd_y = self._clamp_to_stage_margin(desired_current_x, desired_current_y)
                 self._start_smooth_move(cmd_x, cmd_y)
                 self.state.sample_removed = False
@@ -2407,7 +2486,6 @@ class AFMCallbacks:
                     f"moved to ({cmd_x:.1f}, {cmd_y:.1f})"
                 )
             else:
-                # 5. Verification failed → enter click-to-move correction mode
                 self.log(
                     "⚠️ AI Recall verification FAILED: "
                     f"reference score={verification.get('reference_score', 0.0):.3f}, "
