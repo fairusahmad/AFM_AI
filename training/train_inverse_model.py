@@ -3,6 +3,8 @@ train_inverse_model.py - Train AI inverse model for hysteresis compensation
 """
 
 import os
+import sys
+from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
@@ -10,17 +12,32 @@ import numpy as np
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.neural_network import MLPRegressor
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def resolve_project_path(path_str):
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    cwd_candidate = Path.cwd() / path
+    if cwd_candidate.exists():
+        return cwd_candidate
+    return PROJECT_ROOT / path
+
 
 def load_data(filename="inverse_model_data.pkl"):
     """Load preprocessed training data and scalers."""
-    if not os.path.exists(filename):
-        print(f"File {filename} does not exist, please run data preprocessing first")
+    resolved = resolve_project_path(filename)
+    if not os.path.exists(resolved):
+        print(f"File {resolved} does not exist, please run data preprocessing first")
         return None
 
-    if filename.endswith(".pkl"):
-        return joblib.load(filename)
+    if resolved.suffix == ".pkl":
+        return joblib.load(resolved)
 
-    data = np.load(filename, allow_pickle=True)
+    data = np.load(resolved, allow_pickle=True)
     return {
         "X_train": data["X_train"],
         "X_test": data["X_test"],
@@ -217,6 +234,7 @@ def test_compensation(model_bundle):
 
 def save_model(model, training_data, metrics, filename="inverse_model.pkl"):
     """Save the trained model package for UI integration."""
+    output_path = resolve_project_path(filename)
     model_data = {
         "model": model,
         "scaler_X": training_data["scaler_X"],
@@ -225,8 +243,8 @@ def save_model(model, training_data, metrics, filename="inverse_model.pkl"):
         "target_name": training_data.get("target_name", "cmd_x"),
         "metrics": metrics,
     }
-    joblib.dump(model_data, filename)
-    print(f"\nModel saved to: {filename}")
+    joblib.dump(model_data, output_path)
+    print(f"\nModel saved to: {output_path}")
 
 
 def main():

@@ -7,7 +7,7 @@ train_remount_real.py — 用真实帧对训练 Remount 预测模型
     用匹配算法确定它们之间的真实像素偏移作为标签。
 
 用法:
-    python train_remount_real.py [--device cuda]
+    python training/train_remount_real.py [--device cuda]
 """
 
 import argparse
@@ -20,8 +20,9 @@ import joblib
 import numpy as np
 from sklearn.neural_network import MLPRegressor
 
-BASE_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(BASE_DIR))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from afm_ml_recognition import DeepFeatureExtractor, FEATURE_DIM
 from afm_relocation import (
@@ -32,8 +33,8 @@ from afm_relocation import (
     to_grayscale_u8,
 )
 
-SITE_MEMORY_ROOT = BASE_DIR / "collected_data" / "site_memories"
-OUTPUT_PATH = BASE_DIR / "collected_data" / "models" / "deep_remount_predictor_real.pkl"
+SITE_MEMORY_ROOT = PROJECT_ROOT / "collected_data" / "site_memories"
+OUTPUT_PATH = PROJECT_ROOT / "collected_data" / "models" / "deep_remount_predictor_real.pkl"
 
 
 # ═══════════════════════════════════════════════════════════════

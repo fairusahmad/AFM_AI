@@ -708,6 +708,9 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         ("research_patterns", "6. Verify Tip"),
         ("ai_recall", "AI Recall"),
         ("ai_zoom", "AI Zoom"),
+        ("smooth_slower", "Slower"),
+        ("smooth_faster", "Faster"),
+        ("relocation_go_now", "Go Now"),
     ]
     for idx, (key, label) in enumerate(relocation_specs):
         add_button(relocation_frame, 2 + idx // 2, idx % 2, key, label)
@@ -719,7 +722,7 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         bd=0,
         height=64,
     )
-    relocation_help_frame.grid(row=6, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 0))
+    relocation_help_frame.grid(row=8, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 0))
     relocation_help_frame.grid_propagate(False)
     relocation_help_frame.columnconfigure(0, weight=1)
     relocation_help_widget = tk.Label(
@@ -745,9 +748,9 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         font=("Segoe UI", 9, "bold"),
         anchor="w",
     )
-    relocation_preview_label.grid(row=7, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 4))
+    relocation_preview_label.grid(row=9, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 4))
     preview_frame = tk.Frame(relocation_frame, bg=PANEL_FACE)
-    preview_frame.grid(row=8, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 6))
+    preview_frame.grid(row=10, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 6))
     preview_frame.columnconfigure(0, weight=1)
     preview_frame.columnconfigure(1, weight=1)
     overview_preview = tk.Label(
@@ -796,8 +799,8 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         font=("Segoe UI", 9, "bold"),
         anchor="w",
     )
-    relocation_status_label.grid(row=9, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 4))
-    relocation_frame.rowconfigure(10, weight=1)
+    relocation_status_label.grid(row=11, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 4))
+    relocation_frame.rowconfigure(12, weight=1)
     relocation_status_widget = scrolledtext.ScrolledText(
         relocation_frame,
         wrap=tk.WORD,
@@ -811,7 +814,7 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         pady=6,
         height=14,
     )
-    relocation_status_widget.grid(row=10, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 0))
+    relocation_status_widget.grid(row=12, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 0))
     relocation_status_widget.configure(state=tk.DISABLED)
     relocation_status_text = TkTextProxy(relocation_status_widget)
     relocation_panel.children_by_role["relocation_status_text"] = {"artist": relocation_status_text}
@@ -825,6 +828,9 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         "research_patterns": "Verify Tip: re-match multiple remembered landmark patterns around the tip to confirm whether the cantilever is at the correct place.",
         "ai_recall": "AI Recall: one-click AI relocation - load site memory, recognize pattern with rotation, move cantilever, verify. Click to correct if needed.",
         "ai_zoom": "AI Zoom: recall saved zoom level, AI-recognize pattern, auto zoom-out search if not found, then move + verify.",
+        "smooth_slower": "Slower: reduce the smooth animated cantilever movement speed so relocation motion is easier to watch.",
+        "smooth_faster": "Faster: increase the smooth animated cantilever movement speed for quicker relocation travel.",
+        "relocation_go_now": "Go Now: immediately jump to the pending AI relocation target, or to the current motion destination if no relocation target is pending.",
     }
     for key, message in relocation_hover_map.items():
         button_objects[key].bind_hover_text(relocation_help, message, relocation_default_help)
@@ -991,29 +997,54 @@ def _layout_trace(panel):
 def _layout_relocation(panel):
     width, height = panel.bounds[2], panel.bounds[3]
     if width >= height * 3.0:
-        button_w = 0.11
+        button_w = 0.095
         button_h = BUTTON_HEIGHT_WIDE
         gap = 0.008
         start_x = 0.03
         y = 0.10
-        roles = ["save_ref", "remove_sample", "auto_origin", "ml_origin",
-                 "relocate", "research_patterns", "ai_recall", "ai_zoom"]
+        roles = [
+            "save_ref",
+            "remove_sample",
+            "auto_origin",
+            "ml_origin",
+            "relocate",
+            "research_patterns",
+            "ai_recall",
+            "ai_zoom",
+            "smooth_slower",
+            "smooth_faster",
+            "relocation_go_now",
+        ]
         for index, role in enumerate(roles):
             panel.set_child_bounds(role, [start_x + index * (button_w + gap), y, button_w, button_h])
     elif width >= height * 1.1:
         panel.set_child_bounds("research_patterns", [0.05, 0.08, 0.43, BUTTON_HEIGHT_WIDE])
         panel.set_child_bounds("relocate", [0.52, 0.08, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("auto_origin", [0.05, 0.27, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("ml_origin", [0.52, 0.27, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("save_ref", [0.05, 0.46, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("remove_sample", [0.52, 0.46, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("ai_recall", [0.05, 0.65, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("ai_zoom", [0.52, 0.65, 0.43, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("auto_origin", [0.05, 0.23, 0.43, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("ml_origin", [0.52, 0.23, 0.43, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("save_ref", [0.05, 0.38, 0.43, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("remove_sample", [0.52, 0.38, 0.43, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("ai_recall", [0.05, 0.53, 0.43, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("ai_zoom", [0.52, 0.53, 0.43, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("smooth_slower", [0.05, 0.68, 0.27, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("smooth_faster", [0.365, 0.68, 0.27, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("relocation_go_now", [0.68, 0.68, 0.27, BUTTON_HEIGHT_WIDE])
     else:
-        y_inc = 0.105
+        y_inc = 0.08
         y_start = 0.06
-        roles_vert = ["save_ref", "remove_sample", "auto_origin", "ml_origin",
-                      "relocate", "research_patterns", "ai_recall", "ai_zoom"]
+        roles_vert = [
+            "save_ref",
+            "remove_sample",
+            "auto_origin",
+            "ml_origin",
+            "relocate",
+            "research_patterns",
+            "ai_recall",
+            "ai_zoom",
+            "smooth_slower",
+            "smooth_faster",
+            "relocation_go_now",
+        ]
         for idx, role in enumerate(roles_vert):
             panel.set_child_bounds(role, [0.08, y_start + idx * y_inc, 0.84, BUTTON_HEIGHT_COMPACT])
     panel.set_text_position("relocation_help", 0.04, 0.10)
@@ -1121,6 +1152,9 @@ def setup_dashboard(fig, layout_path=None):
         relocation_panel.add_button("research_patterns", "6. Verify Tip", fontsize=9.0),
         relocation_panel.add_button("ai_recall", "AI Recall", fontsize=8.8),
         relocation_panel.add_button("ai_zoom", "AI Zoom", fontsize=8.8),
+        relocation_panel.add_button("smooth_slower", "Slower", fontsize=8.8),
+        relocation_panel.add_button("smooth_faster", "Faster", fontsize=8.8),
+        relocation_panel.add_button("relocation_go_now", "Go Now", fontsize=8.8),
     ]:
         button_objects[key] = button
     relocation_panel.add_text_block(

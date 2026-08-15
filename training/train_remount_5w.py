@@ -15,7 +15,7 @@ train_remount_5w.py — 大样本 Remount 变换回归训练（5万样本/锚点
           （像素空间，调用方自行 × scale 转 um）
 
 使用:
-  python train_remount_5w.py [--samples 50000] [--batch 256] [--device cuda]
+  python training/train_remount_5w.py [--samples 50000] [--batch 256] [--device cuda]
 """
 
 import argparse
@@ -29,13 +29,17 @@ import numpy as np
 import torch
 from sklearn.neural_network import MLPRegressor
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # 复用现有模块
 from afm_ml_recognition import DeepFeatureExtractor, deep_pair_features, FEATURE_DIM
 from afm_phase2_ml import _load_site_memories
 from afm_relocation import apply_affine, rotation_translation_affine, to_grayscale_u8
 
-BASE_DIR = Path(__file__).resolve().parent
-SITE_MEMORY_ROOT = BASE_DIR / "collected_data" / "site_memories"
+BASE_DIR = PROJECT_ROOT
+SITE_MEMORY_ROOT = PROJECT_ROOT / "collected_data" / "site_memories"
 DEFAULT_SAMPLES_PER_ANCHOR = 50000
 
 

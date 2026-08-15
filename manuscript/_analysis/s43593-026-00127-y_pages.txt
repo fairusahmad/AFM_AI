@@ -1,0 +1,1604 @@
+FILE: s43593-026-00127-y.pdf
+PAGES: 16
+
+===== PAGE 1 =====
+Luo et al. eLight            (2026) 6:10  
+https://doi.org/10.1186/s43593-026-00127-y
+RESEARCH ARTICLE Open Access
+© The Author(s) 2026. Open Access  This article is licensed under a Creative Commons Attribution 4.0 International License, which 
+permits use, sharing, adaptation, distribution and reproduction in any medium or format, as long as you give appropriate credit to the 
+original author(s) and the source, provide a link to the Creative Commons licence, and indicate if changes were made. The images or 
+other third party material in this article are included in the article’s Creative Commons licence, unless indicated otherwise in a credit line 
+to the material. If material is not included in the article’s Creative Commons licence and your intended use is not permitted by statutory 
+regulation or exceeds the permitted use, you will need to obtain permission directly from the copyright holder. To view a copy of this 
+licence, visit http:// creat iveco mmons. org/ licen ses/ by/4. 0/.
+elight.springeropen.com
+Highly scalable machine vision enabled 
+with meta-optics-based ultra-wide neural 
+network
+Mingcheng Luo1, Meirui Jiang2, Bhavin J. Shastri3, Nansen Zhou4, Wenfei Guo1, Jianmin Xiong1, 
+Dongliang Wang1, Renjie Zhou4, Chester Shu1, Qi Dou2 and Chaoran Huang1*   
+Abstract 
+Optical neural networks (ONNs) offer a route to low-latency, energy-efficient AI, but scaling them to modern 
+model sizes is constrained by two practical bottlenecks: training large ONNs is computationally prohibitive, 
+and implementing or tuning millions of optical components is highly sensitive to fabrication imperfections 
+and alignment errors. Here we report a metasurface-based optical learning machine that bypasses these barriers 
+by operating in an ultra-wide regime. We use an optical metasurface with 41 million optical parameters to form 
+an ultra-wide NN, and show that, at this scale, a fixed, untrained metasurface can closely approximate a fully trained 
+one. Residual mismatch is compensated by a compact digital backend with only 102–104 trainable parameters, 
+enabling task adaptation without retraining or re-fabricating the metasurface. Experimentally, the resulting hybrid 
+system delivers scalable machine vision across six tasks, achieving accuracy competitive with state-of-the-art models 
+including ResNet and Vision Transformer, while remaining tolerant to fabrication imperfections and misalignment. 
+Our approach is highly scalable, tolerant to fabrication errors, and operates under both coherent and incoherent 
+illumination, thus providing a practical pathway to large-scale, high-performance optical AI computing.
+Keywords Optical neural network, Neuromorphic computing, Machine vision
+1 Introduction
+Neural networks (NNs) have become a powerful tool 
+across various scientific and technological domains, trig -
+gering transformative shifts in fields such as drug dis -
+covery, image processing, autonomous vehicles, and 
+medical diagnostics  [1]. However, the growing complexity 
+of problems is causing the cost of training and inferring 
+NN models to double every 2  months   [2 ], significantly 
+outpacing the advancements in complementary metal-
+oxide-semiconductor (CMOS) circuits. Optical neural 
+networks (ONNs) are highly promising for addressing 
+the above challenges due to the high degree of parallelism 
+inherent in light waves  [3 –46]. By harnessing this paral -
+lelism, ONNs can offer significant energy efficiency and 
+speed advantages.
+Despite the theoretical potential of ONNs, current 
+implementations face challenges in scaling up parameter 
+numbers. Two-dimensional (2D) integrated ONNs can 
+achieve high computing speed but have a limited number 
+of components, due to the large footprint of optical com -
+ponents, the insertion loss, and the complexities involved 
+in controlling these components. By transitioning to 3D 
+free-space optics, spatial parallelism in optics allows for 
+*Correspondence:
+Chaoran Huang
+crhuang@ee.cuhk.edu.hk
+1 Department of Electronic Engineering, The Chinese University of Hong 
+Kong, Shatin, New Territories, Hong Kong, China
+2 Department of Computer Science and Engineering, The Chinese 
+University of Hong Kong, Shatin, New Territories, Hong Kong, China
+3 Centre for Nanophotonics, Department of Physics, Engineering Physics 
+& Astronomy, Queen’s University, 64 Bader Lane, Kingston, ON K7L3N6, 
+Canada
+4 Department of Biomedical Engineering, The Chinese University of Hong 
+Kong, Shatin, New Territories, Hong Kong, China
+
+===== PAGE 2 =====
+Page 2 of 16Luo et al. eLight            (2026) 6:10 
+a significant increase in the number of parameters  [5]. 
+Experimental demonstrations have successfully realized 
+approximately 100,000 scalar multiplications   [39–46]. 
+However, the parameter count is still significantly smaller 
+than current AI models, which may have millions to bil -
+lions of parameters [47, 48].
+An appealing solution to further scale up ONNs is 
+utilizing optical metasurfaces, which consist of high-
+density meta-atoms arranged in a two-dimensionally 
+periodic structure  [49–55]. Each meta-atom can be 
+precisely tailored to modulate the transmission property 
+of incident light at the sub-wavelength scale. With a 
+density of more than 4 million meta-atoms per mm 2 , 
+optical metasurfaces have the potential to enable a large-
+scale ONN with the parameter number close to that in 
+large-scale AI models. However, current metasurface-
+based ONN demonstrations still have very limited 
+parameter numbers, fewer than 1 million [37, 38, 42, 43, 
+56]. Training large-scale ONNs via gradient descent is 
+computationally prohibitive because accurate gradient 
+computation requires complex physics-based models, 
+leading to long training times, high memory costs, and 
+large optimization spaces. Even when such training is 
+achieved, slight misalignments at sub-wavelength scales 
+can result in significant reductions in accuracy  [57, 
+58]. Moreover, because metasurfaces are typically not 
+programmable, every new task requires re-training and 
+fabricating a new metasurface chip, which limits their 
+deployment in practical applications.
+Alternative computing paradigms can eliminate the 
+need for large-scale training. Examples include reservoir 
+computing  [59–75], extreme learning machines  [76– 80], 
+and random projections  [68, 81–83]. These computing 
+systems combine a fixed optical system as the optical fron-
+tend, together with a trainable digital layer as the backend. 
+By only training the digital layer, the overall computing 
+system is adaptable to various downstream tasks. How -
+ever, current demonstrations mostly rely on the intrinsic 
+physics of optical systems. The performance of the opti -
+cal frontend cannot be guaranteed. As a result, the overall 
+performance often falls short of fully trained neural net -
+works. T o compensate for the non-optimal performance of 
+the optical frontend, an excessively large digital neural net-
+work is required, undermining the energy efficiency and 
+speed advantages that optics aim to provide.
+T o address these limitations, this work employs a 
+large-scale optical metasurface composed of 41 million 
+meta-atoms to implement an optical frontend, inspired 
+by the extreme learning machine (ELM)   [84– 86]. In 
+a classic ELM, the network consists of a single hidden 
+layer whose parameters are randomly initialized and 
+kept fixed, while only the output layer is trained. Sub -
+sequent variants extend this framework by modifying 
+the network depth and architectural structure. The 
+performance of an ELM depends on the width of the 
+hidden layer: increasing the number of hidden neurons 
+enhances the representation capacity and improves 
+accuracy  [35, 87–90]. Therefore, we exploit an opti -
+cal metasurface with 41 million meta-atoms to real -
+ize an ultra-wide hidden layer, which is then followed 
+by an ultra-compact digital NN serving as the output 
+layer. T ogether, these components form a hybrid ELM 
+architecture that leverages massive optical parallel -
+ism in metasurface for high-capacity feature extrac -
+tion while retaining digital flexibility for task-specific 
+learning. Further, guided by the Neural Tangent Ker -
+nel (NTK) framework [91], which provides a theory of 
+dynamics in wide NN, we initialize the weights using 
+a Gaussian distribution with an appropriately chosen 
+variance (the variance selection is discussed in Sup -
+plementary Note 2). In this regime, NTK theory pre -
+dicts that training induces only minimal changes to 
+the hidden-layer parameters; consequently, fixing the 
+optical frontend and training only a compact digital 
+NN can enable close to optimal task-specific learning 
+compared to a fully trained system. Consistent with this 
+prediction, our hybrid system, which uses a digital NN 
+with only 102 to 104 trainable parameters, successfully 
+addresses six diverse tasks and achieves accuracy that 
+surpasses prior ONNs and is competitive with leading 
+vision models such as ResNet and Vision Transformer. 
+This includes real-world applications such as large-
+scale breast cancer diagnosis and lesion localization. 
+A detailed comparison of our system with other prior 
+ONNs is provided in Table  S9 in Supplementary Note 
+27.
+From a practical implementation perspective, our 
+metasurface-based hybrid system eliminates the need 
+for precise training individual meta-atoms. Moreover, 
+the system is highly tolerant to fabrication imperfections 
+and alignment errors, as their effects can be readily 
+compensated by retraining the compact digital NN. 
+These features confer distinct scalability advantages: (1) 
+the system scales naturally to high-resolution inputs, 
+as demonstrated by end-to-end processing of medical 
+images with more than 106 pixels; (2) it readily extends 
+to more complex NN architectures: for example, we 
+implement a recurrent NN (RNN) that uses the hybrid 
+system as its internal state, achieving 99.1% accuracy 
+on an action recognition task. Furthermore, our system 
+can operate under both coherent and incoherent 
+illumination, broadening the application scope beyond 
+conventional ONNs that rely on coherent light.With 
+over 99.99% of the computation performed passively by 
+the optical metasurface (see Supplementary Note 4 for 
+the derivation), the system achieves exceptional energy 
+
+===== PAGE 3 =====
+Page 3 of 16
+Luo et al. eLight            (2026) 6:10 
+ 
+efficiency and low latency. Overall, our system offers 
+a highly practical pathway toward high-performance 
+optical AI computing.
+2  Results
+2.1  Working principle and device design
+The implementation of the proposed metasurface-
+based optical learning machine (MOLM) is illustrated 
+in Fig.  1a. The MOLM consists of a metasurface-based 
+optical frontend, followed by a compact digital NN that 
+can be trained to generate prediction results for various 
+tasks. The optical frontend is an optical metasurface 
+created by 6,400 × 6,400 = 41 million silicon cylindrical 
+meta-atoms. Their diameters range from 100 to 400 
+nm, with a unit cell period of 500 nm. The diameter 
+of each meta-atom is determined in two steps. First, 
+we generate a 6, 400 × 6, 400 matrix of optical phase 
+modulation coefficients, randomly sampled from a 
+Gaussian distribution with zero mean and a standard 
+deviation (SD) of 0.4π . The diameter of each meta-
+atom is then obtained from the mapping between 
+the optical phase modulation coefficient and meta-
+atom diameter, as detailed in Supplementary Note 1. 
+The details of metasurface design and fabrication are 
+provided in Methods and Supplementary Notes 1 and 
+3. An optical lens is placed between the metasurface 
+and a CMOS sensor to perform a Fourier transform, 
+which further enhances the network’s ability to extract 
+high-frequency features. The CMOS sensor, with a 
+resolution of 600 × 800, is placed at the focal plane of 
+the optical lens to bridge the optical frontend and the 
+digital backend through photodetection while providing 
+square nonlinearity. A 532-nm laser diode is used as the 
+light source for the following experiments. As shown 
+in the Discussion, our system can also operate under 
+incoherent LED illumination. The sensor output is 
+downsampled before being fed into the digital NN to 
+ensure compactness, and the network is trained on these 
+downsampled outputs to generate final predictions.
+Before photodetection, the input optical image U0 
+undergoes a linear transformation given by 
+F(Hd U0 ⊗ W ) , where W  is the complex-valued 
+transmission matrix of the metasurface, Hd is the 
+diffraction matrix, F(·) denotes the Fourier transform 
+implemented by the optical lens, and ⊗ represents the 
+Hadamard product. Diffraction induces an effective 
+N × N fully connected network, where N is the number of 
+meta-atoms. After photodetection, the output of the k -th 
+sensor pixel is given by 
+˜U k =
+[∑ k·R
+i=k·(R−1) F(Hd U0 ⊗ W )[i,:]
+]2
+, where R  is the 
+ratio of the number of meta-atoms to sensor pixels 
+( R = N/M  ). The photodetector implements a square-law 
+operation, which serves as the nonlinear activation 
+(neuron) in the hidden layer of an ELM. The followed 
+digital NN serves as the output layer of the ELM. 
+Therefore, our system is equivalent to an ELM in 
+architecture. See the deviation details of the system model 
+in Supplementary Note 5.
+T o illustrate the importance of the parameter N, we 
+visualize the transformed images as N varies, as shown 
+in Fig. 1c. Information entropy has been used to evaluate 
+the performance of NNs, including ELMs  [35, 92, 93]. 
+Increasing N significantly enhances the information 
+entropy, from 8.4 bits without the metasurface to 
+13 bits with 41 million meta-atoms, quantified as 
+− ∑M
+k=0 U k log2 (U k), where U k = ˜Uk/ ∑M
+k=0 ˜Uk [ 94], 
+as shown in Fig.  1d. In addition, Fig.  1e shows that the 
+transformed images exhibit increasingly rich high-
+frequency components, which, according to machine 
+learning theory  [95], enable networks to learn high-
+frequency functions in low-dimensional domains. 
+A detailed explanation of the enhancement of high-
+frequency components and information entropy is 
+provided in Supplementary Note 26. This enhanced 
+ability to capture high-frequency features improves 
+MNIST classification accuracy from 87.3% without the 
+metasurface to 94.7% with 41 million meta-atoms, even 
+in the absence of an optical lens, as shown in Fig.  1g. 
+When an optical lens is introduced to perform a Fourier 
+transform, these high-frequency features are further 
+amplified, leading to an accuracy improvement from 94.7 
+to 99.2%. These results are obtained by downsampling the 
+output of a 600 × 800 sensor array to 15 × 20 , enabling a 
+compact digital NN with only 300 × 10 weights. We also 
+validate our approach on the more complex CIFAR-10 
+dataset, observing a similar trend: accuracy increases as 
+the number of optical parameters grows to 107 . The final 
+experimental accuracy reaches 91.6% with only 7,440 
+trainable digital parameters, as shown in Fig.  1h, which 
+is comparable to that of ResNet-50. The experimental 
+details about MNSIT and CIFAR-10 benchmarking can 
+be found in Methods and Supplementary Note 16.
+We further show that when the metasurface contains 
+tens of millions of parameters in the hidden layer, a fixed, 
+untrained metasurface approaches the performance of 
+a fully trained one. This is validated by comparing the 
+root mean square error (RMSE) between the parameters 
+in untrained and trained networks with the same model 
+architecture. Fig.  1f shows that the RMSE between the 
+untrained and trained optical parameters decreases as 
+the number of optical parameters N increases. When N 
+is 41 million, the RMSE reduces from 1.02 to 0.018. This 
+scaling behavior is consistent with predictions from NTK 
+theory. The residual difference between the untrained 
+and trained optical front-ends can be effectively 
+
+===== PAGE 4 =====
+Page 4 of 16Luo et al. eLight            (2026) 6:10 
+compensated by a small digital NN. As a result, the 
+overall MNIST classification accuracy achieved by the 
+untrained network reaches 99.2%, which is very close 
+to the fully trained accuracy of 99.6%, as shown in 
+Fig.  1g. Such scaling behavior is also influenced by the 
+initialization statistics. When the optical parameters 
+are drawn from a narrower Gaussian distribution (SD 
+= 0.2π ) or from a non-Gaussian distribution extracted 
+a
+Spatial light modulator 
+(SLM)
+Optical lens
+Single-layer
+metasurface Optical image
+Processed image
+Incident beam
+Image sensor array
+Metasurface-based near-optimal optical frontend
+Disorder-engineered meta-atoms
+(complex-valued weight)
+Localization
+Segmentation
+Classification
+Input images
+Highly-compact
+digital neural network
+Digital backend
+Prediction results
+Classification
+5
+Localization
+Object
+location
+Segmentation
+Segmentate 
+object
+b
+Spherical wavesInput optical 
+field Metasurface
+Pixel 1
+⋮
+Pixel 2
+⋮
+=⊗
+wN
+PixelM=
+diffraction 
+matrix
+Optical lens
+/uni2131(⋅)Fourier
+transform
+Camera
+w2
+w3
+w4
+w5
+w6
+w7
+w8
+w1
+x
+z
+y
+Comparable to
+An ultra- wide  neural network 
+N=  41 million M=  480,000
+Square-law
+nonlinearity
+Input /uni2131
+Sum pooling
+Fourier feature 
+extraction
+NN optical network
+Metasurface
+Camera
+Output
+g @ MNIST dataset
+Max. Min.
+c
+Dense speckledf eatures
+x
+z y
+Without
+metasurface
+N=  1 million
+N=
+100,000
+Fourier feature 
+extraction
+Experiment
+N=
+41 million
+N=  41 million 
+with optical lens
+h
+1.5π
+0
+Pattern of phase change
+1.5π
+0
+f
+d Enhancement of information entropy
+e Enhancement of high-frequency features
+Fig. 1 The metasurface-based optical learning machine (MOLM). a Schematic of the MOLM. The optical image generated by the SLM is projected 
+onto a single-layer metasurface consisting of massive cylindrical silicon meta-atoms. An optical lens then collects the reflected optical image 
+by the metasurface. Following that, the optical field at the focusing plane is captured by an image sensor array. Lastly, the captured image is fed 
+into a digital neural network to produce the prediction result. b The illustration of the metasurface-based ultra-wide neural network. c The 
+transformed images by the metasurface-based optical frontend versus the number of meta-atoms N. d The value’s distribution and information 
+entropy of transformed images versus the number of meta-atoms N. e The normalized power density of the transformed image versus the spatial 
+frequency for different numbers of meta-atoms N. f The parameter difference (RMSE) before and after training versus the number of optical 
+parameters N. g The MNIST accuracies of the metasurface-based optical frontend with different configurations. h The experimental CIFAR-10 
+accuracy versus the number of meta-atoms
+
+===== PAGE 5 =====
+Page 5 of 16
+Luo et al. eLight            (2026) 6:10 
+ 
+from the mode coupling of multimode fibers  [76], the 
+RMSE between untrained and trained optical parameters 
+still decreases with increasing parameter count, but at a 
+slower rate. This suggests that the initialization statistics 
+are tunable hyperparameters to optimize, but they are 
+typically empirical and depend on the specific system 
+and task. The choice of SD = 0.4π in our design is further 
+justified in the Supplementary Note 2.
+2.2  Experimental demonstration of high performance, 
+versatility, and practicability
+We begin by conducting machine vision tasks to 
+demonstrate the high performance, versatility, and 
+high scalability of our system. For benchmarking, we 
+compared the performance of our MOLM with three 
+large-scale deep learning models: ResNet-50   [96], 
+a classical 50-layered CNN with approximately 
+23.5 million parameters; the Segment Anything 
+model (SAM)  [97], a cutting-edge large promotable 
+segmentation model with 93.7 million parameters; and 
+Vision Transformer (ViT)  [47], a transformer encoder 
+model for image classification with more than 85.8 
+million parameters (Supplementary Note 18). Figure  2a 
+shows the schematic of the experimental setup for 
+benchmarking characterization (see details in Methods 
+and Supplementary Note 4). For each task, the input 
+images are generated using an SLM. These images are 
+processed by the metasurface and then collected by an 
+optical lens before being detected by a CMOS digital 
+camera. The detected digital image is downsampled, with 
+the downsampling ratios being task-dependent. The same 
+metasurface chip is used for all the tasks. Only the digital 
+neural network at the backend is trained for different 
+applications.
+The tasks are chosen not only to demonstrate our 
+system’s ability to adapt to diverse applications using a 
+fixed, untrained metasurface, but also to highlight its 
+practical advantages in implementation. Specifically, 
+we showcase its capabilities in: (1) processing with 
+an ultra-compact digital neural network (COVID-19 
+Radiography), (2) handling high-resolution images 
+in a single shot (Thoracic Disease Detection), and (3) 
+performing multitask classification and detection by 
+redesigning only a small digital NN.
+2.2.1  Image classification with ultra‑compact digital NN
+COVID-19 Radiography: We first demonstrate the appli -
+cation of our MOLM on the COVID-19 Radiography 
+dataset  [98], as shown in Fig.  2e, highlighting its ability 
+to achieve high-performance image classification using 
+a highly compact digital neural network. This dataset 
+includes over 20,000 chest X-ray (CXR) images covering 
+normal and COVID-19 positive cases, each with 299 × 
+299 pixels. The optical images with 299 × 299 pixels are 
+generated by the SLM, processed by the MOLM, and 
+subsequently detected. The detected image is dramati -
+cally downsampled to only 12 × 16 pixels, followed by a 
+highly compact regression network with only 192 weights 
+at the digital backend to produce the binary classification 
+results for normal and COVID-19 cases. The accuracy, 
+precision, sensitivity, and specificity obtained from the 
+classification results are 98.0%, 96.8%, 99.2%, and 96.9% 
+using only 192 digitally trained weights, respectively. The 
+experimentally obtained accuracy of MOLM up to 98.0%, 
+outperforms previously demonstrated simulation and 
+experimental ONNs  [76, 99], as shown in Fig.  2g. This 
+accuracy is competitive against ResNet-50 (97.0%) and 
+SAM (97.2%) and slightly lower than ViT (99.0%). Nev -
+ertheless, our MOLM can compress the digital model by 
+a factor of 4.9 × 105 compared to ResNet-50 and 1.8 × 106 
+compared to ViT, signifying a remarkable reduction of 
+computing time by 1.2 × 105 times at the training stage 
+and energy consumption by 1,900 times at the inference 
+stage.
+The computing time includes the time required for 
+SLM response, the free-space propagation of the light, 
+camera response, and executing a digital computer, 
+Fig. 2 Experimental results of the MOLM for three benchmark tasks. a Schematic of the experimental setup of the MOLM for the benchmark 
+tasks. b Image of the metasurface chip compared with a Hong Kong dollar coin. c Optical microscope image of the fabricated metasurface chip 
+with a compact area of 3.2 × 3.2 mm2 (left graph) and the scanning electron microscope (SEM) image of a zoom-in metasurface region containing 
+25 × 25 meta-atoms (right graph). d The measurement result of quantitative phase imaging (QPI) of a zoom-in region of the metasurface chip. 
+The details about the QPI measurement are provided in Supplementary Note 7. In the color wheel, the color represents the phase modulation 
+coefficient, and the brightness represents the amplitude modulation coefficient. e, h, and k Illustration of the dataset images of the COVID-19 
+Radiography (e), the NIH ChestX-ray8 (h), and RSNA Intracranial Hemorrhage Detection tasks (k). f The accuracy versus optical neuron number 
+of the MOLM for the COVID-19 Radiography. The dashed line represents the accuracy of SAM as a comparison. The inset graphs with colorful 
+scatters represent the results of the t-SNE analysis. i The confusion matrix of the prediction result of the NIH ChestX-ray8. (l) Bleeding regions 
+inside the brain predicted by the MOLM (bottom graph) and digital ResNet-50 (upper graph). g, j, and m Comparison of accuracy and electronic 
+parameters of the MOLM with other optical approaches [76, 99] and digital models for the COVID-19 Radiography (g), the NIH ChestX-ray8 (j), 
+and RSNA Intracranial Hemorrhage Detection tasks (m)
+(See figure on next page.)
+
+===== PAGE 6 =====
+Page 6 of 16Luo et al. eLight            (2026) 6:10 
+respectively. The energy consumption includes the 
+energy consumed by the laser source, SLM, camera, and 
+digital computer, respectively. More details about the 
+time and energy consumption benchmarks can be found 
+in Supplementary Notes 23 and 24.
+Our investigation further shows that the substantial 
+number of optical parameters unique to the metasurface 
+device is the key factor contributing to the high accuracy. 
+The accuracy increases from 83.0% to 98.0% as the 
+number of optical parameters increases from 4.2 million 
+c
+3.2 mm
+41 million nanodisks
+1µ m
+25 25 nanodisks
+5m m
+b
+Metasurfacec hip
+d
+Measured complex
+transmission matrix of 
+them etasurface
+1µ m
+phase
+amplitude
+a
+Laser
+Beam
+expander
+Polarizer
+Analyzer
+Metasurface
+chip
+Beam
+splitter
+Converging 
+lens
+Camera
+Phase-modulated SLM
+COVID-19 Radiography 
+(299 299 pixels)
+Normal
+COVID-19
+e f g
+Ref.76
+Ref.99
+Parameter reduction
+3.5× 105 times
+Classification with ultra-compact digital NN (192 weights)
+NIH ChestX-ray8
+(1024× 1024 pixels)
+Mass
+Atelectasis
+Cardiomegaly
+Effusion
+Infiltration
+Nodule
+Pneumonia
+Pneumothorax
+Parameter reduction
+7.1× 103 times
+h i jAccuracy 85.4 %
+Ability to end-to-end process high resolution (1,024 1,024 pixels) images
+RSNA Intracranial Hemorrhage 
+Detection (512 ×5 12 pixels)
+Normal
+Hemorrhage
+Ground truth ResNet-50 Ours
+ResNet-50
+Meta-ONN
+Parameter reduction
+3.5×1 05 times
+k l m
+Multi-task ability for classification and detection
+t-SNE-2
+t-SNE-1
+t-SNE-1
+t-SNE-2
+Fig. 2 (See legend on previous page.)
+
+===== PAGE 7 =====
+Page 7 of 16
+Luo et al. eLight            (2026) 6:10 
+ 
+to 41 million, as shown in Fig.  2f (see details about 
+experiments in Supplementary Note 9). To gain deeper 
+insights into the data, we employ t-distributed stochastic 
+neighbor embedding (t-SNE)  [100] to visualize the data 
+after being processed by the MOLM, where the original 
+images are transformed into a lower-dimensional space 
+by the metasurface. As shown in the inset graphs of 
+Fig. 2f, the separation between different classes becomes 
+highly distinct as the number of optical parameters 
+increases substantially to 41 million.
+Encouraged by the performance we have achieved, we 
+delve into more challenging applications that have never 
+been demonstrated by ONNs. These tasks showcase our 
+MOLM’s ability to process high-resolution images and 
+tackle more challenging medical diagnostic tasks.
+2.2.2  Capability for end‑to‑end processing of high‑resolution 
+images
+Thoracic diseases detection: This task aims to demonstrate 
+our system’s ability to perform end-to-end processing 
+of high-resolution images with over one million pixels. 
+The NIH ChestX-Ray8 dataset  [101] comprises high-
+resolution (1,024 × 1,024 pixels) front-view X-ray images 
+covering eight different thoracic diseases as shown in 
+Fig. 2h. We demonstrate that these commonly occurring 
+thoracic diseases can be detected by our MOLM with an 
+average accuracy of 85.4% as shown in Fig. 2i, followed by 
+minimal digital processing using 9,600 digitally trained 
+weights. The achieved accuracy is comparable to results 
+from ViT (85.8% accuracy) employing 85.8 million 
+digitally trained weights. Additionally, this task highlights 
+our MOLM’s ability to process high-resolution images 
+without any pre-processing, utilizing a pixel resolution of 
+1,024 × 1,024, the highest demonstrated in ONNs to date, 
+to our best knowledge.
+2.2.3  Multi‑task ability for classification and detection
+Intracranial Hemorrhage Detection: Intracranial 
+hemorrhage (ICH) is a critical medical condition that 
+requires rapid and intensive treatment to prevent 
+further damage and to improve patient outcomes  [102]. 
+However, the timely detection of ICHs is often delayed 
+due to a lack of prompt access to radiologists who read 
+the scans. Here, we leverage our MOLM to expedite 
+ICH detection in CT images, as shown in Fig.  2k. Our 
+experiments solve two tasks. In the first task, we detect 
+the existence of hemorrhages in CT images, achieving 
+an accuracy of 98.8%, a precision of 98.5%, a sensitivity 
+of 99.2%, and a specificity of 98.3%. In the second task, 
+we identify the bleeding point location with the MOLM. 
+We first downsample the optical images after MOLM to 
+15 × 20 pixels. These downsampled images serve as the 
+input to a 6-layered fully connected neural network at the 
+digital backend. The output is a vector with 4 elements, 
+each element representing the horizontal and vertical 
+position coordinates, the width, and the height of a 
+rectangular box. The box indicates the bleeding region 
+in the CT images, as shown in Fig.  2l. Intersection over 
+Union (IoU) is obtained from the predicted box and the 
+true box to evaluate the performance of locating the 
+bleeding region. Here, IoU is the ratio of the overlapped 
+area over the united area of the two boxes. Our MOLM 
+achieves an IoU of 0.61 for 3 different bleeding positions, 
+meaning that the predicted bounding box indicating 
+the bleeding location is well aligned with the ground 
+truth box. In comparison, the average IoU obtained by 
+ResNet-50 is 0.64.
+An important discovery implied by the results of our 
+MOLM across diverse vision tasks is its capacity of using 
+only a single-layer metasurface combining a small-scale 
+digital NN to compete against cutting-edge NN models 
+with tens of millions of parameters. We experimentally 
+validate in different tasks that our superior performance 
+is credited to the massive parameters uniquely offered 
+by the metasurface, as demonstrated in Fig.  2g, j, and 
+m. While a small-scale NN is still necessary at the 
+digital backend, its size can be highly compressed to up 
+to a factor of 10 5 . Furthermore, it is worth noting that 
+the remaining small NN at the backend can be readily 
+implemented in analog devices, enabling the realization 
+of an all-analog system.
+2.3  Scalable to complex NN models for high‑accuracy 
+video sequence processing
+Leveraging the computing framework of infinitely 
+NNs built with random parameters, we can confidently 
+increase the depth of the optical NN without concerns 
+about physical errors accumulating layer by layer. This 
+allows our system to tackle more complicated AI tasks. 
+Here we construct a recurrent neural network (RNN) 
+using our MOLM and apply it in video processing. 
+Serving as a hidden layer, the MOLM is recurrently 
+connected to form an RNN [40, 103]. This metasurface-
+based RNN (meta-RNN) takes a sequence of image 
+frames from a video as input, as shown in Fig.  3a. Each 
+frame is processed by the meta-RNN, with the output 
+being downsampled and read out from the camera. 
+Subsequently, this output is combined with the hidden 
+state from previous frames to derive the hidden state of 
+the current frame. Finally, the output is connected to a 
+logistic regression-based classifier. The meta-RNN is 
+employed for human action recognition tasks on the 
+KTH dataset [ 104], which comprises six types of human 
+actions across four different scenarios.
+The evaluation of the performance of the model involves 
+two types of action classification. One type identifies 
+
+===== PAGE 8 =====
+Page 8 of 16Luo et al. eLight            (2026) 6:10 
+actions jointly determined by sequences of frames, defined 
+as action accuracy. The action is determined from the 
+percentage of votes for all actions in each testing video 
+sequence. The action with the maximum votes is the pre -
+dicted action in a video sequence. The other type identi -
+fies the action indicated by each individual frame, defined 
+as frame accuracy. With 9,180 trained weights, our meta-
+RNN obtains the frame accuracy of 97.5% and action accu-
+racy of 99.1%, as shown in Fig.  3b and c, respectively. The 
+training time to realize such a high accuracy is only 4.01 s 
+using NVIDIA RTX 3090. The obtained accuracy exceeds 
+those from digital NNs using long-short term memory 
+(action accuracy of 90.7%) and the state-of-the-art ONNs 
+(action accuracy of 96.3%). Additionally, unlike other 
+ONNs that typically need preprocessing of the frames of 
+the action sequences by pre-trained convolutional neural 
+network (CNN) for human segmentation, our meta-RNN 
+can directly process videos without the need for such pre-
+processing steps. Consequently, our meta-RNN is capable 
+of processing videos at high speed, achieving 1,968 frames 
+per second.
+We further utilize this task to demonstrate the capabil -
+ity of our MOLM to rapidly recover from external pertur-
+bations and its potential for real-time adaptable learning. 
+To show this property, we intentionally move the metas -
+urface by 10 µ m creating the axial misalignment after the 
+digital NN is trained. The misalignment is the 20 times 
+of the light wavelength. This axial misalignment results 
+in a change in the modulation matrix of the metasur -
+face, which may lead to a degradation of the accuracy by 
+16.7%. However, the MOLM is capable of quickly recover-
+ing from the error after re-training the single-layer digital 
+NN as shown in Fig. 3e. The accuracy is restored to 96.3% 
+after 45 epochs using only 1,920 training images, which 
+takes only 234  ms. This study highlights the adaptability 
+of the MOLM, even in dynamic or unpredictable environ-
+ments and its potential for real-time adaptable learning. 
+The experimental details can be found in Supplementary 
+Note 10. Computing very large matrices with optical fan-
+in allows for extremely low optical energy consumption. 
+If the matrix size is sufficiently large, each multiplication 
+requires a photon number far less than 1. Here, we dem -
+onstrate in Fig. 3f that an average photon number of 0.078 
+per multiplication is sufficient to maintain human action 
+classification accuracy over 95%. This feature makes our 
+system suitable for low-illumination environments. The 
+experimental details can be found in Supplementary Note 
+11.
+2.4  Solving real‑world challenge: accelerating the analysis 
+of multi‑gigapixel whole slide images for cancer 
+diagnosis
+Leveraging on these advantages, we finally demonstrate 
+the application of our MOLM in a real-world challenge, 
+showcasing its distinct benefits in computationally 
+intensive applications. For many diseases, particularly 
+cancers, pathological diagnosis is the gold standard 
+in clinical practice. The introduction of Whole Slide 
+Imaging (WSI) scanners, which generate digitized 
+pathology microscopic images, has revolutionized 
+pathology image analysis. This technology enables 
+computer-aided diagnostics, leveraging advanced 
+deep-learning techniques to reduce the workload of 
+pathologists and optimize the regional distribution 
+of medical resources  [107]. However, WSIs present 
+a challenge for deep learning due to their extremely 
+large size. With single slides containing multi-gigapixel 
+images, efficient processing of these images is crucial for 
+automated diagnosis.
+In our work, we apply an MOLM to detect and local -
+ize breast cancer that has metastasized to nearby lymph 
+nodes, a task of significant clinical importance but 
+requiring substantial reading time from pathologists. 
+Pathologists typically need to review thousands of meg -
+apixel photos from a single WSI exceeding 10 gigapixels. 
+We use the CAMELYON16 dataset  [108] for our study. 
+To address the processing of extensive WSIs, each with 
+dimensions of more than 2 billion pixels, we employ a 
+patch-based framework. Initially, a preprocessing algo -
+rithm, Otsu algorithm [109], is used to separate the raw 
+(See figure on next page.)
+Fig. 3 Experimental results of the meta-RNN for video-based human action recognition. a The working flow of the meta-RNN for video-based 
+human action recognition. The action video is processed by the meta-RNN in a frame-by-frame way. Each action video contains 20 frames 
+with a time interval of 80 ms. Firstly, the input frame xt with 120 × 160 pixels is encoded into the optical domain without any preprocessing. It 
+is then processed by the MOLM to generate a compressed digital image f(xt ) with 34 × 45 pixels. The processed frame is fused with the output 
+at the previous frame to form the output at the current frame, i.e., h t = h t−1 + f(xt) . Finally, the output at the current frame is fed into a digital 
+neural network to produce a frame-wise prediction result yt . The action prediction result is the label that appears most frequently in all frame-wise 
+results of the action video. b The confusion matrix of frame-wise prediction results. c The confusion matrix of action prediction results. d 
+Performance comparison of the MOLM with the state-of-the-art digital and optical approaches [40, 68, 105, 106]. The training time and processing 
+speed of the meta-RNN are the predicted ones based on current experimental results (see details in Supplementary Note 23). e The ability 
+of the meta-RNN in quickly recovering the accuracy after experiencing a hard perturbation. f The action accuracy versus averaged photons 
+per complex-valued multiplication
+
+===== PAGE 9 =====
+Page 9 of 16
+Luo et al. eLight            (2026) 6:10 
+ 
+Fig. 3 (See legend on previous page.)
+
+===== PAGE 10 =====
+Page 10 of 16Luo et al. eLight            (2026) 6:10 
+whole slide image into the useful foreground and the non-
+tissue background, resulting in a reduced total pixel of the 
+whole slide image to be processed, as shown in Fig.  4a. 
+We then divide the large WSIs into smaller patches, each 
+containing 1,000 × 1,000 pixels. These patches consist 
+of 1,775 normal patches and 887 tumor patches. Dur -
+ing the training phase, we convert the patches into opti -
+cal images using the SLM. The modulated patch samples 
+are processed by our MOLM and detected by the sensor 
+array. Subsequently, the output from the sensor array is 
+downsampled. The final step is to train a single-layered 
+neural network with the patch samples to create a classi -
+fier capable of distinguishing between normal and tumor 
+classes. The mean AUC is 96.0% when the trained weight 
+number is 140 and increases to 97.0% at the weight num -
+ber of 1,200, as shown in Fig.  4b. The training process 
+takes only 1.46 s, achieving a training accuracy of 95.1%, 
+as shown in Fig. 4d.
+Another WSI consisting of 2,030 unlabeled patches 
+is used to test the performance of tumor tissue 
+segmentation. Initially, these unlabeled patches are 
+first processed using our MOLM. Subsequently, the 
+processed patches are inferred with the trained single-
+layered NN to produce the tumor-positive probability. 
+Finally, the probability heat map is generated by 
+mapping the predicted probability of the patches to 
+the raw WSI. As shown in Fig.  4c, the resulting heat 
+map demonstrates that our MOLM achieves accurate 
+segmentation of three different tumor tissue regions 
+from the billion-pixel-scale WSI, achieving an IOU of 
+0.60, which is comparable to that of SAM (0.63). More 
+importantly, our MOLM exhibits an impressively fast 
+inference time of 1.02 s per whole slide image (WSI), 
+representing a significant reduction compared to 
+SAM which requires 1.48  h to analyze one WSI. This 
+remarkable reduction in inference time allows our 
+SAM Ours
+37.8 h1 .46 s
+1.48 h1 .02 s
+84 2,352
+a
+Optical image
+Metasurface
+Optical
+lens
+Fewer image 
+sensors
+Optical processing
+Cropped patches
+(1000 ×1 000 pixels)
+Whole slide image
+(2.2 ×1 010 pixels)
+⋮ ⋮
+Processed patches
+(30 ×4 0 pixels)
+⋮ ⋮
+Flatten
+Single-layered
+neural network
+Patch-level
+result
+Normal
+Tumor
+/uni22EF
+Patch 
+cropping
+Otsu
+preprocessing
+cb
+Raw WSI
+a b c
+Prediction map (SAM)
+75 % 100 %
+Tumor probability 
+a
+b c
+a
+b
+c
+a b c
+Prediction map (Ours)
+75 %1 00 %
+Tumor probability 
+a
+b c
+Tumor region 
+Annotation mapN ormal
+Tumor
+d
+Fig. 4 Experimental results of the MOLM for cancer diagnosis based on the whole slide image. a The working flow of the cancer diagnosis based 
+on the whole slide image. The input WSI with over 2.2 × 1010 pixels is preprocessed with the Ostu method and cropped into a series of patch images 
+with 1,000 × 1,000 pixels. The patch images are processed by the MOLM in a single shot and compressed into 30 × 40 pixels. Finally, these processed 
+images are fed to a highly compact digital neural network to generate the final prediction result of whether the tumor cell is detected in the image. 
+b ROC curve of the patch-level prediction results during the training phase. c The heat map of the prediction probabilities of the MOLM 
+and the state-of-the-art segmentation model (SAM). The inset graphs a, b, and c represent three different zoom-in regions of the WSI, respectively. 
+d Comparison of the training time and inference time of the MOLM with SAM. The time consumption of the MOLM is the predicted one based 
+on current experimental results (see the details in Supplementary Note 23)
+
+===== PAGE 11 =====
+Page 11 of 16
+Luo et al. eLight            (2026) 6:10 
+ 
+MOLM to diagnose more than 42,352 patients within 
+a single 12-h working day, while only 8 patients can be 
+diagnosed using SAM in the same timeframe.
+3  Discussions
+Connections and differences with digital ELM: The 
+overall architecture is equivalent to a standard ELM, but 
+with two key differences: our hidden-layer nonlinearity is 
+quadratic rather than sigmoidal, and the fully connected 
+weights are complex-valued and modulated by diffraction 
+rather than arbitrary real-valued random variables. In 
+Supplementary Note 5, we show that our system with 
+complex-valued parameters slightly outperforms a digital 
+ELM as the hidden-layer width increases; however, both 
+exceed 99% accuracy on MNIST when the parameter 
+count reaches tens of millions.
+Operation under incoherent light illumination: 
+One advantage of the meta-ONN is its compatibility 
+with broadband illumination, which greatly expands the 
+application scope of our system. Although metasurface 
+responses are wavelength dependent, our approach does 
+not rely on precisely optimized optical parameters, so 
+spectral variations have a limited impact on performance. 
+To experimentally demonstrate this, a broadband 
+continuous LED source is combined with wavelength 
+band-pass filters to realize different spectral widths from 
+20 nm to 100 nm. The LED light contains all wavelengths 
+within the chosen spectral band. We demonstrate that 
+MNIST inference can achieve >98.3% accuracy across 
+all spectral widths. The modest drop relative to 532-nm 
+monochromic laser operation (99.2%) arises because 
+LED-based optics implement only intensity-domain 
+linear operations, whereas coherent light enables 
+complex-valued linear transformations, yielding higher 
+model capacity. The experimental details are provided in 
+Supplementary Note 12.
+Fabrication variances tolerance: Typical optical 
+metasurfaces are highly sensitive to fabrication variations 
+due to their subwavelength feature sizes; even with the 
+same design, performance can vary substantially across 
+devices. In contrast, our system is much more robust 
+because it does not rely on the precise realization of indi -
+vidual meta-atoms. To demonstrate this, we tested three 
+chips fabricated in different batches. The meta-atoms of 
+the fabricated metasurface exhibit a diameter range from 
+92 nm to 413 nm, deviating from the designed diameter 
+range from 100 nm to 400 nm due to fabrication errors. 
+Despite the existence of physical imperfections, we 
+observe that the experimental MNIST accuracy varies by 
+less than 1% across the devices. The experimental results 
+are provided in Methods and Supplementary Note 4.
+Comparison with random scattering media: 
+Random scattering media, which strongly modulate 
+optical amplitude and phase, could also serve as an 
+optical frontend in our architecture. The key distinction 
+is controllability: random media are defined by 
+micrometre-scale scatterers, whereas metasurfaces 
+comprise engineered nanometre-scale meta-atoms, 
+providing a far higher density of effective modulation 
+elements. This finer spatial control enables more efficient 
+spatial information encoding and, consequently, higher 
+classification accuracy. Experimentally, replacing the 
+metasurface with a random scattering medium yields 
+92.0% accuracy on MNIST, substantially lower than the 
+99.2% achieved with the metasurface. Experimental 
+details are provided in Supplementary Note 13.
+Improving system compactness: The sub-wavelength 
+optical metasurface is much thinner and smaller 
+than bulk optical devices. This allows for a highly 
+compact integration with the CMOS sensors and thus 
+a minimized system volume of our MOLM system. The 
+system volume of a free-space-based ONN is defined as 
+the area of the free-space optical device multiplied by 
+the spacing distance between the optical device and the 
+COMS camera. In the current experiment setup which 
+uses a reflective metasurface, the reduction of volume 
+is hindered by the use of a beam splitter, resulting in a 
+system volume of 2,560 mm 3 . In an improved design, the 
+metasurface could be designed to work in a transmissive 
+way by using a transparent substrate, for example, 
+sapphire and quartz. The beam splitter is not needed. The 
+distance between the metasurface and the converging 
+lens could be shortened. In addition, the bulky 
+converging lens could be replaced with a thin metalens 
+with a high numerical aperture of 0.99 [110]. Considering 
+that the metalens needs to fully cover the metasurface 
+with a squared area of 3.2 × 3.2 mm2 , the diameter of the 
+metalens is 4.5 mm and the focal length is 2.27 mm. The 
+minimum distance between the metasurface and the lens 
+can be equal to the metasurface size of 3.2 mm, which 
+enables the all-to-all connection of optical weights during 
+light diffraction. The spacing between the metasurface 
+and the camera can be as small as 5.47 mm. As a result, 
+the system volume could be extremely shrunk to 56 mm3 . 
+which is more compact by 102–104 times than most state-
+of-the-art 3D free-space-based ONN systems [33, 39, 40, 
+42]. This compact volume allows the optical system to be 
+fully integrated with the following digital backend.
+Possible limitations: Compared with digital NN, 
+the current system exhibits two limitations that can 
+improvement when addressing more complex tasks. 
+First, the architecture of the digital backend is relatively 
+simple, consisting only of fully connected layers, whereas 
+state-of-the-art digital ELM typically employ more 
+advanced architectures such as deep convolutional 
+NNs and transformers. The simple architecture of the 
+
+===== PAGE 12 =====
+Page 12 of 16Luo et al. eLight            (2026) 6:10 
+digital backend would result in inadequate learning 
+ability and thus unsatisfactory performance in complex 
+tasks. Second, we use an optical lens that transforms 
+image into the Fourier domain. We found images in 
+the Fourier domain exhibit obvious frequency-related 
+features that are useful for classification tasks. However, 
+for tasks requiring pixel-wise prediction, such as image 
+segmentation, the optical lens will degrade system 
+performance. In future work, these limitations could be 
+overcome by designing a task-specific digital backend 
+and removing the optical lens from the system.
+In summary, we experimentally demonstrate a high-
+performance MOLM that provides unprecedented 
+accuracy and scalability. These exceptional performances 
+are a result of realizing a true large-scale optical 
+computing system by innovatively combining optical 
+metasurfaces, a device fully leveraging the parallelism of 
+optics, with infinitely wide NNs, a computing framework 
+suitable for metasurface-based NNs to scale to 
+arbitrary widths, depths, and complexity. An important 
+observation from our experimental demonstration is that 
+a single-layer optical metasurface chip with 41 million 
+disorder-engineered meta-atoms, combining a small-
+scale digital NN, can achieve competitive performance 
+compared to state-of-the-art deep NNs such as ResNet 
+and ViT. Our work represents a significant advancement, 
+moving ONNs beyond benchmark demonstrations 
+to effectively address real-world challenges. The 
+performance comparison of the MOLM with the 
+state-of-the-art ONN systems is shown in Table  S8 in 
+Supplementary Note 27.
+Our system loads over 99.99% computations on a 
+passive optical metasurface. Although a small digital 
+NN is still required at the backend, the time for training 
+such as NN is greatly shortened from tens of hours to 
+a few seconds. If high-speed SLMs and cameras are 
+used, the training time could be reduced to only tens of 
+milliseconds. This makes our system highly adaptable to 
+dynamic or unpredictable environments that require real-
+time learning abilities, such as robot-assisted surgery. 
+Meanwhile, the inference time could easily be improved 
+to the microsecond or even sub-microsecond level, which 
+could enable a range of applications involving high-
+speed objects and requiring real-time decisions. Even 
+shorter training and inference times could be achieved 
+using delicate neural network accelerators realized with 
+field-programmable gate arrays (FPGAs) and all-analog 
+electronics  [111, 112]. Overall, our system provides a 
+practical pathway toward high-performance optical AI 
+computing, enabled by its scalability, high tolerance to 
+fabrication and alignment errors, and ability to operate 
+under both coherent and incoherent illumination.
+4  Methods
+Metasurface design and simulation: The metasurface 
+is created using massive periodic unit cells. Every unit 
+cell consists of a 220-nm-thick silicon cylindrical meta-
+atoms with a diameter that varies across different cells. 
+The silicon meta-atoms is deposited on a 2- µm-thick 
+buried oxide layer on a 725- µm-thick silicon substrate. 
+These unit cells are arranged in a square lattice in the 
+two-dimensional plane. The period of the metasurface 
+unit cell is 500 nm. Based on three-dimensional FDTD 
+simulations, the optical phase and amplitude modulation 
+coefficients of the unit cell for the incident light are 
+obtained at various diameters under normal incidence. 
+In the simulations, the grid size is 0.25 nm for the 
+meta-atom and 8 nm for the buried oxide and substrate 
+layers, respectively. The boundaries at the x-y plane are 
+periodic to emulate the periodic meta-atoms of the 
+metasurface, and the boundaries at the z plane are perfect 
+match layers. The simulation details are provided in 
+Supplementary Note 1. Simulation results indicates that 
+the optical phase and amplitude of the incident light can 
+be effectively manipulated by varying the diameter of the 
+meta-atoms. The data table for the mapping relationship 
+between meta-atom diameter and phase modulation 
+is shown in Figure S1c of Supplementary Information. 
+The fabricated metasurface comprises 6400 × 6400 = 
+41 million meta-atoms. The diameter of every meta-
+atom is independently designed to realize the optical 
+phase and amplitude modulation coefficients following 
+a Gaussian sampling distribution. Specifically, the 
+standard deviation of the Gaussian distribution of phase 
+modulation is designed as 0.4 π . With the designed phase 
+distribution, the diameter of every meta-atom can be 
+obtained according to the mapping relationship between 
+the optical phase and meta-atom diameter, as shown in 
+Figure S1c of Supplementary Information. The range of 
+the meta-atom diameter is from 100 nm to 400 nm. The 
+amplitude distribution is also determined without the 
+need for further designs according to the relationship 
+between optical amplitude and meta-atom’s diameter.
+Metasurface fabrication: The metasurface chip is 
+fabricated based on a multi-project-wafer (MPW) 
+process offered by a commercial electron-beam-
+lithography-based silicon foundry. The fabrication 
+process starts with a silicon-on-insulator (SOI) wafer, 
+where the device layer thickness is 220 nm, the buffer 
+oxide layer thickness is 2 µ m, and the silicon substrate 
+thickness is 725 µ m. A layer of electron-sensitive resist 
+is coated on the device layer of the wafer, followed by 
+heating to strengthen the resist. After that, a 100 keV 
+electron gun is used to define the meta-atom patterns of 
+the metasurface. The wafer is then chemically developed, 
+and the patterned resist remains on the substrate. Finally, 
+
+===== PAGE 13 =====
+Page 13 of 16
+Luo et al. eLight            (2026) 6:10 
+ 
+an anisotropic RIE etching process is performed to 
+transfer the pattern of the resist into the silicon device 
+layer. The etching process will continue until the surface 
+of the buffer oxide layer is exposed.
+Quantitative phase imaging of the fabricated 
+metasurface: Quantitative Phase Imaging (QPI) is used to 
+measure the reflective phase response of the metasurface. 
+The system has a diffraction-limited spatial resolution of 
+665 nm and a field of view of 36 × 36 µm2 . With a total 
+magnification of 200 × , the system achieves a high pixel 
+resolution of 60 nm, thus enabling a clear visualization of 
+the phase modulation matrix. The details about the QPI 
+measurement are provided in Supplementary Note 7.
+Experimental setup of the metasurface-based optical 
+learning machine (MOLM): Our MOLM comprises 
+an SLM for optical image generation, a single-layer 
+metasurface chip, a converging lens for coherent 
+summation, and a camera for optical image capture. 
+The experiment setup starts with a 532-nm laser diode 
+which emits an optical beam with a diameter of 3 mm 
+and a spectrum with a full width at half maximum 
+(FWHM) of 10 nm. The laser is then collimated using 
+an optical lens and expanded to a diameter of 10  mm 
+using an optical 4-f system. The purpose of expanding 
+the beam diameter is to ensure that the laser beam 
+can effectively cover the active area (15.4 mm × 9.6 
+mm) of the spatial light modulator (SLM, Meadowlark 
+Optics E19x12-400–800-HDM8). The SLM has a full-
+pixel resolution of 1,920 × 1,200, a pitch size of 8 µ m, 
+and an 8-bit modulation depth. The expanded laser 
+beam enters onto the SLM at an off-axis angle of 12 ◦ . 
+By introducing two linear polarizers placed before 
+and after the SLM, the SLM can be used to encode the 
+digital image onto the optical domain, as introduced 
+in Supplementary Note 4. The polarization angle of 
+both polarizers is 45 ◦ with respect to the horizontal 
+direction. The SLM-generated optical image is 
+projected onto the metasurface chip. Here, to ensure 
+that the optical image can effectively overlap with 
+the area of the metasurface chip to realize full-area 
+modulation of the optical image, the effective area of 
+the optical image is intentionally set as 4.1 × 4.1 mm 2 . 
+Two approaches are used to realize the consistent 
+effective area in all the tasks: (1) For the task images 
+whose pixel scale is smaller than 512 × 512, the images 
+are upsampled to a pixel scale of 512 × 512 using the 
+nearest area interpolation method in the digital domain. 
+Consequently, the effective area of the optical image is 
+512 × 8 µ m × 512 × 8 µ m = 4.1 × 4.1 mm2 . For example, 
+the pixel scale of the COVID-19 image is upsampled to 
+be 512 × 512 from 299 × 299. (2) For the task images 
+whose pixel scale is larger than 512 × 512, the generated 
+optical image is minified to an effective area of 4.1 × 
+4.1 mm 2 using a 4-f system in the optical domain. For 
+example, the Chest X-ray image with a pixel scale of 
+1,024 × 1,024 is minified double. In addition, since the 
+effective area of the optical image is smaller than the 
+laser beam size (10 × 10 mm 2 ), an aperture of 5.5 × 5.5 
+mm2 is used to block the stray light of the laser beam. 
+A 50/50 beam splitter is placed between the SLM and 
+the metasurface chip to realize the normal incidence of 
+the optical image to the metasurface. The optical image 
+is reflected by the metasurface and the beam splitter in 
+sequence. Following that, the reflected optical image 
+is focused by an optical converging lens with a focal 
+length of 150  mm. Lastly, a camera (IRVI Contour IR 
+Digital CMOS Camera) with an 8-bit depth and an 
+activated pixel number of 600 × 800 is placed close to 
+the focal plane of the converging lens to capture the 
+optical image. The figure showing the experimental 
+setup is shown in Figure S4 of Supplementary 
+Information.
+Neural network training: In the experiment, the 
+camera-captured images processed by the MOLM are 
+fed into a single-layer backend digital neural network to 
+produce the prediction results of various machine vision 
+tasks. The working flow of neural network training is 
+shown in Figure S14a of Supplementary Information. 
+First, the captured images are downsampled by 
+averaging the received power in the neighboring sensor 
+array, see the details in Figure S14b of Supplementary 
+Information. After that, the down-sampled images 
+and the corresponding labels are combined as the new 
+dataset after the MOLM. The dataset is then randomly 
+split into the training dataset and testing dataset by a 
+certain ratio. The training dataset is used to train the 
+digital neural network. The digital neural network 
+consists of an input layer for receiving the input image 
+and an output layer for generating prediction results, 
+and the two layers are fully connected, as shown in 
+Figure S14c of Supplementary Information. Biases are 
+added to the output before the activation function of 
+sigmoid. The mathematical expression of the single-
+layered digital neural network is y = sigmoid(b0 + w 0x) , 
+where b0 , w0 , x, and y are the biases, the digital 
+weights, the input image in the form of vector and the 
+prediction result, respectively. Logistic regression is 
+used to optimize the biases and digital weights. The 
+nonlinear activation function is sigmoid. Finally, the 
+testing dataset is used to verify the performance of 
+the overall system. The downsampling ratio is 1,600 
+for MNIST, 676 for CIFAR-10, 2,500 for COVID-19, 
+
+===== PAGE 14 =====
+Page 14 of 16Luo et al. eLight            (2026) 6:10 
+2,500 for the ICH dataset, 400 for the NIH dataset, 
+400 for the WSI cancer dataset, and 324 for the human 
+action recognition, respectively. The split ratio of the 
+dataset and the hyperparameters for neural network 
+training are task-dependent, which are introduced in 
+Supplementary Notes 11–17. The details about the 
+digital model training (SAM, ResNet-50, and ViT) are 
+provided in Note 22.
+Supplementary Information
+The online version contains supplementary material available at https:// doi. 
+org/ 10. 1186/ s43593- 026- 00127-y.
+Supplementary material 1.
+Acknowledgements
+This work was supported by RGC YCRG C4004-24Y, C1002-22Y, GRF 14208925, 
+ECS 24203724, NSFC 62405258, ITF ITS/237/22, RNE-p4-22 of the Shun 
+Hing Institute of Advanced Engineering, NSFC/RGC Joint Research Scheme 
+N_CUHK444/22.
+Author contributions
+C.H. and M.L. conceived the idea. M.L. designed the metasurface chip, 
+conducted the experiments, and analyzed the experimental data. M.L., J.X., 
+and W.G. conducted the optical simulations. M.J. conducted experiments for 
+digital neural networks. N.Z. conducted the QPI experiment. R.Z supervised 
+the QPI experiment. C.H. led the writing of the main manuscript. M.L and 
+B.S, M.J. C.S, and Q.D. contributed to the paper writing. C.H, Q.D., and C.S. 
+supervised the project.
+Data availability
+The data that support the plots within this paper and other findings of this 
+study are available from the corresponding author upon reasonable request.
+Declarations
+Competing interests
+Chaoran Huang, Chester Shu, and Mingcheng Luo declare US provisional 
+patent application number 63/643,973.
+Received: 23 October 2025   Revised: 10 February 2026   Accepted: 11 
+February 2026
+References
+ 1. Y. LeCun, Y. Bengio, G. Hinton, Deep learning. Nature 521(7553), 
+436–444 (2015)
+ 2. J. Achiam, S. Adler, S. Agarwal, L. Ahmad, I. Akkaya, F.L. Aleman, D. 
+Almeida, J. Altenschmidt, S. Altman, S. Anadkat, et al. Gpt-4 technical 
+report (2023), arXiv preprint arXiv: 2303. 08774
+ 3. B.J. Shastri, A.N. Tait, T. Lima, W.H. Pernice, H. Bhaskaran, C.D. Wright, P .R. 
+Prucnal, Photonics for artificial intelligence and neuromorphic comput-
+ing. Nat. Photonics 15(2), 102–114 (2021)
+ 4. G. Wetzstein, A. Ozcan, S. Gigan, S. Fan, D. Englund, M. Soljačić, C. Denz, 
+D.A. Miller, D. Psaltis, Inference in artificial intelligence with deep optics 
+and photonics. Nature 588(7836), 39–47 (2020)
+ 5. P .L. McMahon, The physics of optical computing. Nat. Rev. Phys. 5(12), 
+717–734 (2023)
+ 6. N.H. Farhat, D. Psaltis, A. Prata, E. Paek, Optical implementation of the 
+hopfield model. Appl. Opt. 24(10), 1469–1475 (1985)
+ 7. W. Bogaerts, D. Pérez, J. Capmany, D.A. Miller, J. Poon, D. Englund, 
+F. Morichetti, A. Melloni, Programmable photonic circuits. Nature 
+586(7828), 207–216 (2020)
+ 8. J. Sun, E. Timurdogan, A. Yaacobi, E.S. Hosseini, M.R. Watts, Large-scale 
+nanophotonic phased array. Nature 493(7431), 195–199 (2013)
+ 9. X. Zhang, K. Kwon, J. Henriksson, J. Luo, M.C. Wu, A large-scale 
+microelectromechanical-systems-based silicon photonics lidar. Nature 
+603(7900), 253–258 (2022)
+ 10. Y. Shen, N.C. Harris, S. Skirlo, M. Prabhu, T. Baehr-Jones, M. Hochberg, X. 
+Sun, S. Zhao, H. Larochelle, D. Englund, Deep learning with coherent 
+nanophotonic circuits. Nat. Photonics 11(7), 441–446 (2017)
+ 11. P . Stark, F. Horst, R. Dangel, J. Weiss, B.J. Offrein, Opportunities for 
+integrated photonic neural networks. Nanophotonics 9(13), 4221–4232 
+(2020)
+ 12. C. Pappas, T. Moschos, M. Moralis-Pegios, G. Giamougiannis, A. Tsaky-
+ridis, M. Kirtas, N. Passalis, A. Tefas, N. Pleros, A teraflop photonic matrix 
+multiplier using time-space-wavelength multiplexed awgr-based 
+architectures. In: 2024 Optical Fiber Communications Conference and 
+Exhibition (OFC), (IEEE, 2024), p. 1–3
+ 13. L. De Marinis, M. Cococcioni, O. Liboiron-Ladouceur, G. Contestabile, P . 
+Castoldi, N. Andriolli, Photonic integrated reconfigurable linear proces-
+sors as neural network accelerators. Appl. Sci. 11(13), 6232 (2021)
+ 14. G. Donati, C.R. Mirasso, M. Mancinelli, L. Pavesi, A. Argyris, Microring 
+resonators with external optical feedback for time delay reservoir 
+computing. Opt. Express 30(1), 522–537 (2021)
+ 15. A. Skalli, J. Robertson, D. Owen-Newns, M. Hejda, X. Porte, S. Reitzen-
+stein, A. Hurtado, D. Brunner, Photonic neuromorphic computing 
+using vertical cavity semiconductor lasers. Opt. Mater. Express 12(6), 
+2395–2414 (2022)
+ 16. K. Sozos, A. Bogris, P . Bienstman, G. Sarantoglou, S. Deligiannidis, C. 
+Mesaritakis, High-speed photonic neuromorphic computing using 
+recurrent optical spectrum slicing neural networks. Commun. Eng. 
+1(1), 24 (2022)
+ 17. R. Amin, J.K. George, H. Wang, R. Maiti, Z. Ma, H. Dalir, J.B. Khurgin, 
+V.J. Sorger, An ITO-graphene heterojunction integrated absorption 
+modulator on Si-photonics for neuromorphic nonlinear activation. 
+Appl. Photon. 6 (12), 120801 (2021)
+ 18. X. Xu, M. Tan, B. Corcoran, J. Wu, A. Boes, T.G. Nguyen, S.T. Chu, B.E. 
+Little, D.G. Hicks, R. Morandotti, 11 tops photonic convolutional 
+accelerator for optical neural networks. Nature 589(7840), 44–51 
+(2021)
+ 19. B. Shi, N. Calabretta, R. Stabile, Inp photonic integrated multi-layer 
+neural networks: architecture and performance analysis. APL Photon. 
+7(1), 010801 (2022)
+ 20. C. Wu, H. Yu, S. Lee, R. Peng, I. Takeuchi, M. Li, Programmable phase-
+change metasurfaces on waveguides for multimode photonic 
+convolutional neural network. Nat. Commun. 12(1), 96 (2021)
+ 21. B. Dong, S. Aggarwal, W. Zhou, U.E. Ali, N. Farmakidis, J.S. Lee, Y. He, 
+X. Li, D.-L. Kwong, C. Wright, Higher-dimensional processing using a 
+photonic tensor core with continuous-time data. Nat. Photon. 17(12), 
+1080–1088 (2023)
+ 22. J.M. Shainline, S.M. Buckley, R.P . Mirin, S.W. Nam, Superconducting 
+optoelectronic circuits for neuromorphic computing. Phys. Rev. Appl. 
+7(3), 034013 (2017)
+ 23. X. Xiao, M.B. On, T. Van Vaerenbergh, D. Liang, R.G. Beausoleil, S. Yoo, 
+Large-scale and energy-efficient tensorized optical neural networks 
+on iii-v-on-silicon moscap platform. APL Photon. 6 (12), 126107 (2021)
+ 24. T. Fu, Y. Zang, Y. Huang, Z. Du, H. Huang, C. Hu, M. Chen, S. Yang, H. 
+Chen, Photonic machine learning with on-chip diffractive optics. Nat. 
+Commun. 14(1), 70 (2023)
+ 25. J. Cheng, Y. Zhao, W. Zhang, H. Zhou, D. Huang, Q. Zhu, Y. Guo, B. Xu, J. 
+Dong, X. Zhang, A small microring array that performs large complex-
+valued matrix-vector multiplication. Front. Optoelectron. 15(1), 15 
+(2022)
+ 26. B. Bai, Q. Yang, H. Shu, L. Chang, F. Yang, B. Shen, Z. Tao, J. Wang, S. Xu, W. 
+Xie, Microcomb-based integrated photonic processing unit. Nat. Com-
+mun. 14(1), 66 (2023)
+ 27. S. Xu, J. Wang, S. Yi, W. Zou, High-order tensor flow processing using 
+integrated photonic circuits. Nat. Commun. 13(1), 7970 (2022)
+
+===== PAGE 15 =====
+Page 15 of 16
+Luo et al. eLight            (2026) 6:10 
+ 
+ 28. X. Meng, G. Zhang, N. Shi, G. Li, J. Azaña, J. Capmany, J. Yao, Y. Shen, 
+W. Li, N. Zhu, Compact optical convolution processing unit based on 
+multimode interference. Nat. Commun. 14(1), 3000 (2023)
+ 29. F. Ashtiani, A.J. Geers, F. Aflatouni, An on-chip photonic deep neural 
+network for image classification. Nature 606(7914), 501–506 (2022)
+ 30. J. Feldmann, N. Youngblood, M. Karpov, H. Gehring, X. Li, M. Stappers, M. 
+Le Gallo, X. Fu, A. Lukashchuk, A.S. Raja, Parallel convolutional process-
+ing using an integrated photonic tensor core. Nature 589(7840), 52–58 
+(2021)
+ 31. N.U. Dinc, A. Saba, J. Madrid-Wolff, C. Gigli, A. Boniface, C. Moser, D. 
+Psaltis, From 3d to 2d and back again. Nanophotonics 12(5), 777–793 
+(2023)
+ 32. M. Yildirim, N.U. Dinc, I. Oguz, D. Psaltis, C. Moser, Nonlinear processing 
+with linear optics. Nat. Photonics 18(10), 1076–1082 (2024)
+ 33. T. Wang, M.M. Sohoni, L.G. Wright, M.M. Stein, S.-Y. Ma, T. Onodera, M.G. 
+Anderson, P .L. McMahon, Image sensing with multilayer nonlinear opti-
+cal neural networks. Nat. Photonics 17(5), 408–415 (2023)
+ 34. J. Chang, V. Sitzmann, X. Dun, W. Heidrich, G. Wetzstein, Hybrid optical-
+electronic convolutional neural networks with optimized diffractive 
+optics for image classification. Sci. Rep. 8(1), 1–10 (2018)
+ 35. F. Xia, K. Kim, Y. Eliezer, S. Han, L. Shaughnessy, S. Gigan, H. Cao, Non-
+linear optical encoding enabled by recurrent linear scattering. Nat. 
+Photonics 18(10), 1067–1075 (2024)
+ 36. K. Wei, X. Li, J. Froech, P . Chakravarthula, J. Whitehead, E. Tseng, A. 
+Majumdar, F. Heide, Spatially varying nanophotonic neural networks. 
+Sci. Adv. 10(45), 0391 (2024)
+ 37. C. Liu, Q. Ma, Z.J. Luo, Q.R. Hong, Q. Xiao, H.C. Zhang, L. Miao, W.M. 
+Yu, Q. Cheng, L. Li, A programmable diffractive deep neural network 
+based on a digital-coding metasurface array. Nat. Electron. 5 (2), 
+113–122 (2022)
+ 38. M. Luo, T. Xu, S. Xiao, H.K. Tsang, C. Shu, C. Huang, Meta-optics based 
+parallel convolutional processing for neural network accelerator. 
+Laser Photon. Rev. 18(11), 2300984 (2024)
+ 39. X. Lin, Y. Rivenson, N.T. Yardimci, M. Veli, Y. Luo, M. Jarrahi, A. Ozcan, 
+All-optical machine learning using diffractive deep neural networks. 
+Science 361(6406), 1004–1008 (2018)
+ 40. T. Zhou, X. Lin, J. Wu, Y. Chen, H. Xie, Y. Li, J. Fan, H. Wu, L. Fang, Q. Dai, 
+Large-scale neuromorphic optoelectronic computing with a recon-
+figurable diffractive processing unit. Nat. Photonics 15(5), 367–373 
+(2021)
+ 41. E. Goi, X. Chen, Q. Zhang, B.P . Cumming, S. Schoenhardt, H. Luan, M. Gu, 
+Nanoprinted high-neuron-density optical linear perceptrons perform-
+ing near-infrared inference on a cmos chip. Light Sci. Appl. 10(1), 40 
+(2021)
+ 42. X. Luo, Y. Hu, X. Ou, X. Li, J. Lai, N. Liu, X. Cheng, A. Pan, H. Duan, 
+Metasurface-enabled on-chip multiplexed diffractive neural networks 
+in the visible. Light Sci. Appl. 11(1), 158 (2022)
+ 43. H. Zheng, Q. Liu, Y. Zhou, I.I. Kravchenko, Y. Huo, J. Valentine, Meta-optic 
+accelerators for object classifiers. Sci. Adv. 8(30), 6410 (2022)
+ 44. H. Zheng, Q. Liu, I.I. Kravchenko, X. Zhang, Y. Huo, J.G. Valentine, Multi-
+channel meta-imagers for accelerating machine vision. Nat. Nanotech-
+nol. (2024). https:// doi. org/ 10. 1038/ s41565- 023- 01557-2
+ 45. S.-Y. Ma, T. Wang, J. Laydevant, L.G. Wright, P .L. McMahon, Quantum-
+noise-limited optical neural networks operating at a few quanta per 
+activation. Res. Sq. (2023). https:// doi. org/ 10. 1038/ s41467- 024- 55220-y
+ 46. T. Wang, S.-Y. Ma, L.G. Wright, T. Onodera, B.C. Richard, P .L. McMahon, An 
+optical neural network using less than 1 photon per multiplication. Nat. 
+Commun. 13(1), 123 (2022)
+ 47. A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A.N. Gomez, 
+Ł. Kaiser, I. Polosukhin, Attention is all you need. Advances in neural 
+information processing systems, vol. 30 (2017)
+ 48. A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn, X. Zhai, T. Unter-
+thiner, M. Dehghani, M. Minderer, G. Heigold, S. Gelly, et al. An image is 
+worth 16x16 words: Transformers for image recognition at scale (2020), 
+arXiv preprint arXiv: 2010. 11929
+ 49. V.-C. Su, C.H. Chu, G. Sun, D.P . Tsai, Advances in optical metasurfaces: 
+fabrication and applications. Opt. Express 26(10), 13148–13182 (2018)
+ 50. W.T. Chen, A.Y. Zhu, F. Capasso, Flat optics with dispersion-engineered 
+metasurfaces. Nat. Rev. Mater. 5(8), 604–620 (2020)
+ 51. D. Neshev, I. Aharonovich, Optical metasurfaces: new generation build-
+ing blocks for multi-functional optics. Light Sci. Appl. 7(1), 58 (2018)
+ 52. Y. Zhao, X.-X. Liu, A. Alù, Recent advances on optical metasurfaces. J. 
+Opt. 16(12), 123001 (2014)
+ 53. S. Chen, W. Liu, Z. Li, H. Cheng, J. Tian, Metasurface-empowered optical 
+multiplexing and multifunction. Adv. Mater. 32(3), 1805912 (2020)
+ 54. X. Qiu, J. Zhang, Y. Fan, J. Zhou, L. Chen, D.P . Tsai, Metasurface enabled 
+high-order differentiator. Nat. Commun. 16(1), 2437 (2025)
+ 55. Y. Zhou, H. Zheng, I.I. Kravchenko, J. Valentine, Flat optics for image dif-
+ferentiation. Nat. Photonics 14(5), 316–323 (2020)
+ 56. G. Qu, G. Cai, X. Sha, Q. Chen, J. Cheng, Y. Zhang, J. Han, Q. Song, S. Xiao, 
+All-dielectric metasurface empowered optical-electronic hybrid neural 
+networks. Laser & Photonics Reviews 16(10), 2100732 (2022)
+ 57. D. Mengu, Y. Zhao, N.T. Yardimci, Y. Rivenson, M. Jarrahi, A. Ozcan, Mis-
+alignment resilient diffractive optical networks. Nanophotonics 9(13), 
+4207–4219 (2020)
+ 58. Y. Luo, D. Mengu, N.T. Yardimci, Y. Rivenson, M. Veli, M. Jarrahi, A. Ozcan, 
+Design of task-specific optical systems using broadband diffractive 
+neural networks. Light Sci. Appl. 8(1), 112 (2019)
+ 59. J. Dong, M. Rafayelyan, F. Krzakala, S. Gigan, Optical reservoir computing 
+using multiple light scattering for chaotic systems prediction. IEEE J. Sel. 
+Top. Quantum Electron. 26(1), 1–12 (2019)
+ 60. U. Paudel, M. Luengo-Kovac, J. Pilawa, T.J. Shaw, G.C. Valley, Classification 
+of time-domain waveforms using a speckle-based optical reservoir 
+computer. Opt. Express 28(2), 1225–1237 (2020)
+ 61. P . Antonik, N. Marsal, D. Rontani, Large-scale spatiotemporal photonic 
+reservoir computer for image classification. IEEE J. Sel. Top. Quantum 
+Electron. 26(1), 1–12 (2019)
+ 62. Y. Paquot, F. Duport, A. Smerieri, J. Dambre, B. Schrauwen, M. Haelter-
+man, S. Massar, Optoelectronic reservoir computing. Sci. Rep. 2(1), 287 
+(2012)
+ 63. L. Larger, M.C. Soriano, D. Brunner, L. Appeltant, J.M. Gutiérrez, L. Pes-
+quera, C.R. Mirasso, I. Fischer, Photonic information processing beyond 
+turing: an optoelectronic implementation of reservoir computing. Opt. 
+Express 20(3), 3241–3249 (2012)
+ 64. D. Brunner, M.C. Soriano, C.R. Mirasso, I. Fischer, Parallel photonic infor-
+mation processing at gigabyte per second data rates using transient 
+states. Nat. Commun. 4(1), 1364 (2013)
+ 65. K. Vandoorne, P . Mechet, T. Van Vaerenbergh, M. Fiers, G. Morthier, 
+D. Verstraeten, B. Schrauwen, J. Dambre, P . Bienstman, Experimental 
+demonstration of reservoir computing on a silicon photonics chip. Nat. 
+Commun. 5(1), 3541 (2014)
+ 66. Q. Vinckier, F. Duport, A. Smerieri, K. Vandoorne, P . Bienstman, M. 
+Haelterman, S. Massar, High-performance photonic reservoir computer 
+based on a coherently driven passive cavity. Optica 2(5), 438–446 
+(2015)
+ 67. L. Larger, A. Baylón-Fuentes, R. Martinenghi, V.S. Udaltsov, Y.K. Chembo, 
+M. Jacquot, High-speed photonic reservoir computing using a time-
+delay-based architecture: million words per second classification. Phys. 
+Rev. X 7(1), 011015 (2017)
+ 68. P . Antonik, N. Marsal, D. Brunner, D. Rontani, Human action recognition 
+with a large-scale brain-inspired photonic computer. Nat. Mach. Intell. 
+1(11), 530–537 (2019)
+ 69. M. Rafayelyan, J. Dong, Y. Tan, F. Krzakala, S. Gigan, Large-scale optical 
+reservoir computing for spatiotemporal chaotic systems prediction. 
+Phys. Rev. X 10(4), 041037 (2020)
+ 70. S. Sunada, A. Uchida, Photonic neural field on a silicon chip: large-scale, 
+high-speed neuro-inspired computing and sensing. Optica 8(11), 
+1388–1396 (2021)
+ 71. M. Nakajima, K. Tanaka, T. Hashimoto, Scalable reservoir computing on 
+coherent linear photonic processor. Commun. Phys. 4(1), 20 (2021)
+ 72. A. Lupo, E. Picco, M. Zajnulina, S. Massar, Deep photonic reservoir com-
+puter based on frequency multiplexing with fully analog connection 
+between layers. Optica 10(11), 1478–1485 (2023)
+ 73. Y.-W. Shen, R.-Q. Li, G.-T. Liu, J. Yu, X. He, L. Yi, C. Wang, Deep photonic 
+reservoir computing recurrent network. Optica 10(12), 1745–1751 
+(2023)
+ 74. D. Wang, Y. Nie, G. Hu, H.K. Tsang, C. Huang, Ultrafast silicon photonic 
+reservoir computing engine delivering over 200 tops. Nat. Commun. 
+15(1), 10841 (2024)
+ 75. Y. Nie, B. Yang, D. Wang, T. Wang, J. Wang, Z. Wang, C. Huang, Integrated 
+laser graded neuron enabling high-speed reservoir computing without 
+a feedback loop. Optica 11(12), 1690–1699 (2024)
+
+===== PAGE 16 =====
+Page 16 of 16Luo et al. eLight            (2026) 6:10 
+ 76. U. Teğin, M. Yıldırım, İ Oğuz, C. Moser, D. Psaltis, Scalable optical learning 
+operator. Nat. Comput. Sci. 1(8), 542–549 (2021)
+ 77. D. Pierangeli, G. Marcucci, C. Conti, Photonic extreme learning machine 
+by free-space optical propagation. Photonics Res. 9(8), 1446–1454 
+(2021)
+ 78. A. Lupo, L. Butschek, S. Massar, Photonic extreme learning machine 
+based on frequency multiplexing. Opt. Express 29(18), 28257–28276 
+(2021)
+ 79. S. Saeed, M. Müftüoğlu, G.R. Cheeran, T. Bocklitz, B. Fischer, M. 
+Chemnitz, Nonlinear inference capacity of fiber-optical extreme 
+learning machines. Nanophotonics (2025). https:// doi. org/ 10. 1515/ 
+nanoph- 2025- 0045
+ 80. S. Biasi, R. Franchi, L. Cerini, L. Pavesi, An array of microresonators as a 
+photonic extreme learning machine. APL Photonics 8(9), 096105 (2023)
+ 81. H. Wang, J. Hu, A. Morandi, A. Nardi, F. Xia, X. Li, R. Savo, Q. Liu, R. Grange, 
+S. Gigan, Large-scale photonic computing with nonlinear disordered 
+media. Nat. Comput. Sci. 4(6), 429–439 (2024)
+ 82. A. Saade, F. Caltagirone, I. Carron, L. Daudet, A. Drémeau, S. Gigan, F. 
+Krzakala, Random projections through multiple optical scattering: 
+Approximating kernels at the speed of light. In: 2016 IEEE International 
+Conference on Acoustics, Speech and Signal Processing (ICASSP), (IEEE, 
+2016), p. 6215–6219
+ 83. I. Kang, S. Pang, Q. Zhang, N. Fang, G. Barbastathis, Recurrent neural 
+network reveals transparent objects through scattering media. Opt. 
+Express 29(4), 5316–5326 (2021)
+ 84. G.-B. Huang, Q.-Y. Zhu, C.-K. Siew, Extreme learning machine: theory and 
+applications. Neurocomputing 70(1–3), 489–501 (2006)
+ 85. J. Wang, S. Lu, S.-H. Wang, Y.-D. Zhang, A review on extreme learning 
+machine. Multimed. Tools Appl. 81(29), 41611–41660 (2022)
+ 86. S. Ding, H. Zhao, Y. Zhang, X. Xu, R. Nie, Extreme learning machine: algo-
+rithm, theory and applications. Artif. Intell. Rev. 44(1), 103–115 (2015)
+ 87. Y. Qing, Y. Zeng, Y. Li, G.-B. Huang, Deep and wide feature based 
+extreme learning machine for image classification. Neurocomputing 
+412, 426–436 (2020)
+ 88. E. Soria-Olivas, J. Gomez-Sanchis, J.D. Martin, J. Vila-Frances, M. Martinez, 
+J.R. Magdalena, A.J. Serrano, Belm: Bayesian extreme learning machine. 
+IEEE Trans. Neural Netw. 22(3), 505–509 (2011)
+ 89. H. Zhou, G.-B. Huang, Z. Lin, H. Wang, Y.C. Soh, Stacked extreme learning 
+machines. IEEE Trans. Cybern. 45(9), 2013–2025 (2014)
+ 90. J.R. Rausell-Campo, A. Hurtado, D. Pérez-López, J. Capmany Francoy, 
+Programmable photonic extreme learning machines. Laser & Photonics 
+Reviews 19(9), 2400870 (2025)
+ 91. A. Jacot, F. Gabriel, C Hongler, Neural tangent kernel: Convergence 
+and generalization in neural networks. Advances in neural information 
+processing systems, vol. 31 (2018)
+ 92. M. Gabrié, A. Manoel, C. Luneau, N. Macris, F. Krzakala, L. Zdeborová, 
+et al. Entropy and mutual information in models of deep neural 
+networks. Advances in neural information processing systems, vol. 31 
+(2018)
+ 93. S. Yu, K. Wickstrøm, R. Jenssen, J.C. Principe, Understanding convolu-
+tional neural networks with information theory: an initial exploration. 
+IEEE Trans. Neural Netw. Learn. Syst. 32(1), 435–442 (2020)
+ 94. D.-Y. Tsai, Y. Lee, E. Matsuyama, Information entropy measure for evalua-
+tion of image quality. J. Digit. Imaging 21(3), 338–347 (2008)
+ 95. M. Tancik, P . Srinivasan, B. Mildenhall, S. Fridovich-Keil, N. Raghavan, U. 
+Singhal, R. Ramamoorthi, J. Barron, R. Ng, Fourier features let networks 
+learn high frequency functions in low dimensional domains. Adv. 
+Neural. Inf. Process. Syst. 33, 7537–7547 (2020)
+ 96. K. He, X. Zhang, S. Ren, J. Sun, Deep residual learning for image recogni-
+tion. In: Proceedings of the IEEE Conference on Computer Vision and 
+Pattern Recognition, (2016), p. 770–778
+ 97. A. Kirillov, E. Mintun, N. Ravi, H. Mao, C. Rolland, L. Gustafson, T. Xiao, S. 
+Whitehead, A.C. Berg, W.-Y. Lo, Segment anything. In: Proceedings of 
+the IEEE/CVF International Conference on Computer Vision, (2023), p. 
+4015–4026
+ 98. T. Rahman, A. Khandakar, Y. Qiblawey, A. Tahir, S. Kiranyaz, S.B.A. Kashem, 
+M.T. Islam, S. Al Maadeed, S.M. Zughaier, M.S. Khan, Exploring the effect 
+of image enhancement techniques on COVID-19 detection using chest 
+x-ray images. Comput. Biol. Med. 132, 104319 (2021)
+ 99. I. Oguz, J.-L. Hsieh, N.U. Dinc, U. Teğin, M. Yildirim, C. Gigli, C. Moser, D. 
+Psaltis, Programming nonlinear propagation for efficient optical learn-
+ing machines. Adv. Photonics 6(1), 016002–016002 (2024)
+ 100. L. Maaten, G. Hinton, Visualizing data using t-sne. J. Mach. Learn. Res. 
+9(11), 2579 (2008)
+ 101. X. Wang, Y. Peng, L. Lu, Z. Lu, M. Bagheri, R.M. Summers, Chestx-ray8: 
+Hospital-scale chest x-ray database and benchmarks on weakly-
+supervised classification and localization of common thorax diseases. 
+In: Proceedings of the IEEE Conference on Computer Vision and Pattern 
+Recognition, (2017), p. 2097–2106
+ 102. A.E. Flanders, L.M. Prevedello, G. Shih, S.S. Halabi, J. Kalpathy-Cramer, R. 
+Ball, J.T. Mongan, A. Stein, F.C. Kitamura, M.P . Lungren, Construction of 
+a machine learning dataset through collaboration: the rsna 2019 brain 
+ct hemorrhage challenge. Radiology: Artificial Intelligence 2(3), 190211 
+(2020)
+ 103. J. Bueno, S. Maktoobi, L. Froehly, I. Fischer, M. Jacquot, L. Larger, D. Brun-
+ner, Reinforcement learning in a large-scale photonic recurrent neural 
+network. Optica 5(6), 756–760 (2018)
+ 104. C. Schuldt, I. Laptev, B. Caputo, Recognizing human actions: a local svm 
+approach. In: Proceedings of the 17th International Conference on Pat-
+tern Recognition, 2004. ICPR 2004, vol. 3, (IEEE, 2004), p. 32–36.
+ 105. A. Gilbert, J. Illingworth, R. Bowden, Action recognition using mined 
+hierarchical compound features. IEEE Trans. Pattern Anal. Mach. Intell. 
+33(5), 883–897 (2010)
+ 106. A. Grushin, D.D. Monner, J.A. Reggia, A. Mishra, Robust human action 
+recognition via long short-term memory. In: The 2013 International 
+Joint Conference on Neural Networks (IJCNN), (IEEE, 2013), p. 1–8.
+ 107. G. Campanella, M.G. Hanna, L. Geneslaw, A. Miraflor, V. Werneck Krauss 
+Silva, K.J. Busam, E. Brogi, V.E. Reuter, D.S. Klimstra, T.J. Fuchs, Clinical-
+grade computational pathology using weakly supervised deep learning 
+on whole slide images. Nat. Med. 25(8), 1301–1309 (2019)
+ 108. B.E. Bejnordi, M. Veta, P .J. Van Diest, B. Van Ginneken, N. Karssemeijer, 
+G. Litjens, J.A. Van Der Laak, M. Hermsen, Q.F. Manson, M. Balkenhol, 
+Diagnostic assessment of deep learning algorithms for detection of 
+lymph node metastases in women with breast cancer. JAMA 318(22), 
+2199–2210 (2017)
+ 109. N. Otsu, A threshold selection method from gray-level histograms. 
+Automatica 11(285–296), 23–27 (1975)
+ 110. R. Paniagua-Dominguez, Y.F. Yu, E. Khaidarov, S. Choi, V. Leong, R.M. 
+Bakker, X. Liang, Y.H. Fu, V. Valuckas, L.A. Krivitsky, A metalens with a 
+near-unity numerical aperture. Nano Lett. 18(3), 2124–2132 (2018)
+ 111. F. Zhou, Y. Chai, Near-sensor and in-sensor computing. Nat. Electron. 
+3(11), 664–671 (2020)
+ 112. Y. Chen, M. Nazhamaiti, H. Xu, Y. Meng, T. Zhou, G. Li, J. Fan, Q. Wei, J. 
+Wu, F. Qiao, All-analog photoelectronic chip for high-speed vision tasks. 
+Nature 623(7985), 48–57 (2023)
+

@@ -1382,6 +1382,24 @@ class AFMCallbacks:
         self.state.current_step = step
         self.log(f"Step size set to {step} um")
 
+    def slow_smooth_move(self, event):
+        current = float(self.state.smooth_move_step)
+        next_step = max(float(self.state.smooth_move_min_step), current / 2.0)
+        if np.isclose(next_step, current):
+            self.log(f"Smooth move speed already at minimum ({current:.1f} um/frame)")
+            return
+        self.state.smooth_move_step = next_step
+        self.log(f"Smooth move speed set to {next_step:.1f} um/frame")
+
+    def fast_smooth_move(self, event):
+        current = float(self.state.smooth_move_step)
+        next_step = min(float(self.state.smooth_move_max_step), current * 2.0)
+        if np.isclose(next_step, current):
+            self.log(f"Smooth move speed already at maximum ({current:.1f} um/frame)")
+            return
+        self.state.smooth_move_step = next_step
+        self.log(f"Smooth move speed set to {next_step:.1f} um/frame")
+
     def move_up(self, event):
         new_target_x, new_target_y = self._clamp_to_stage_margin(self.state.target_x, self.state.target_y - self.state.current_step)
         if self.state.pi_mode:
@@ -1449,6 +1467,23 @@ class AFMCallbacks:
         self.log(
             f"Jumped immediately to destination by dX={delta_x:+.1f} um, dY={delta_y:+.1f} um"
         )
+
+    def go_now_relocation(self, event):
+        pending_x = self.state.ai_relocate_pending_target_x
+        pending_y = self.state.ai_relocate_pending_target_y
+        if self.state.ai_relocate_awaiting_click and pending_x is not None and pending_y is not None:
+            target_x, target_y = self._clamp_to_stage_margin(float(pending_x), float(pending_y))
+            self.state.ai_relocate_awaiting_click = False
+            self.state.ai_relocate_pending_target_x = None
+            self.state.ai_relocate_pending_target_y = None
+            delta_x, delta_y = self._jump_view_to_target(target_x, target_y)
+            self.state.sample_removed = False
+            self.log(
+                "AI relocation accepted immediately: "
+                f"dX={delta_x:+.1f} um, dY={delta_y:+.1f} um"
+            )
+            return
+        self.jump_to_destination(event)
 
     def toggle_pi(self, event):
         self.state.pi_mode = not self.state.pi_mode

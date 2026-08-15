@@ -1,4 +1,9 @@
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from afm_phase2_ml import (
     train_lowmag_embedding_index,
@@ -7,15 +12,14 @@ from afm_phase2_ml import (
 )
 
 
-BASE_DIR = Path(__file__).resolve().parent
-SITE_MEMORY_ROOT = BASE_DIR / "collected_data" / "site_memories"
+SITE_MEMORY_ROOT = PROJECT_ROOT / "collected_data" / "site_memories"
 
 
 def main():
     if not SITE_MEMORY_ROOT.exists():
         raise FileNotFoundError(f"No site memories found at {SITE_MEMORY_ROOT}")
 
-    models_dir = BASE_DIR / "collected_data" / "models"
+    models_dir = PROJECT_ROOT / "collected_data" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Training Phase 2 models from {SITE_MEMORY_ROOT}")

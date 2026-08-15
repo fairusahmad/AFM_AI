@@ -1,0 +1,24 @@
+SECTION CANDIDATES
+Abstract
+Introduction
+Materials and methods
+Results
+Methods section. Thus, an image dataset comprising
+Discussion
+Conclusion
+References
+methods. Antibiotics (Basel). 2022;11:427.
+
+CAPTION / FIGURE LINES
+Figure  1 illustrates the typical characteristics of the
+Fig. 1 Species-specific desiccation patterns of microbial suspensions. (a) The workflow for the deposition and evaporation of microbial suspensions. (b)
+Fig. 5, the peripheral region predominantly consisted of
+Fig. 2 The dynamic evolution of microbial droplets dried at 30 °C was recorded using a 4 × objective. Scale bar: 500 μm
+Fig. 3 Analysis of the mean gray value of patterns during evaporation across different species. (a) Schematic diagram depicting the time-lapse grayscale
+Fig. 4 The dynamic evolution of microbial droplets dried at 30 °C was recorded under a microscope (40 × objective). Scale bar: 20 μm
+Fig. 5 Microscopic analysis of the central and peripheral regions in desiccation patterns across different species was performed using SEM
+Fig. 7 The major architecture of the ResNet 34 model
+Fig. 6 Statistical information of the image dataset formed by the desiccation patterns of microbial suspensions across seven species
+Fig. 8 Performance evaluation of the ResNet-34 model for species classification. ( a) Distribution of image labels across species. ( b, c) ROC curves and
+Figure 9 demonstrates both the desiccation patterns of
+Fig. 9 The Grad-CAM visualizations of the desiccation patterns from microbial droplets across different species

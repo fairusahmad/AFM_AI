@@ -1,0 +1,1058 @@
+FILE: s12951-025-03923-9.pdf
+PAGES: 16
+
+===== PAGE 1 =====
+RESEARCH Open Access
+© The Author(s) 2026. Open Access  This article is licensed under a Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 
+International License, which permits any non-commercial use, sharing, distribution and reproduction in any medium or format, as long as you 
+give appropriate credit to the original author(s) and the source, provide a link to the Creative Commons licence, and indicate if you modified the 
+licensed material. You do not have permission under this licence to share adapted material derived from this article or parts of it. The images or 
+other third party material in this article are included in the article’s Creative Commons licence, unless indicated otherwise in a credit line to the 
+material. If material is not included in the article’s Creative Commons licence and your intended use is not permitted by statutory regulation or 
+exceeds the permitted use, you will need to obtain permission directly from the copyright holder. To view a copy of this licence, visit  h t t p  : / /  c r e a  t i  
+v e c  o m m  o n s .  o r  g / l  i c e  n s e s  / b  y - n c - n d / 4 . 0 /.
+Guan et al. Journal of Nanobiotechnology          (2026) 24:113 
+https://doi.org/10.1186/s12951-025-03923-9
+Journal of Nanobiotechnology
+†Shujuan Guan, Ruyue Yang, Danning Deng and Huilin Long 
+contributed equally to this work.
+*Correspondence:
+Xiumei Hu
+huxiumei@smu.edu.cn
+Dingqiang Chen
+jyksys@126.com
+Full list of author information is available at the end of the article
+Abstract
+Bloodstream infections (BSIs) are life-threatening conditions with rising mortality, urgently requiring rapid pathogen 
+identification to guide timely antibiotic therapy. Current methods (phenotypic identification, MALDI-TOF MS, 
+molecular techniques) are faced with limitations in cost, turnaround time and accessibility. In this study, it was 
+discovered that the drying of microbial suspensions on slides could lead to species-specific desiccation patterns, 
+which reflects the physicochemical properties and complex interactions of microorganisms during evaporation. 
+Inspired by this interesting phenomenon, an AI-powered platform is proposed for rapid pathogen identification 
+through automated analysis of these patterns. By establishing an image dataset comprising 10,055 desiccation 
+patterns of common BSIs pathogens ( Escherichia coli, Klebsiella pneumoniae, Pseudomonas aeruginosa, Acinetobacter 
+baumannii, Staphylococcus aureus, Enterococcus faecium  and Candida albicans), a ResNet-34 deep learning model is 
+trained, achieving a classification accuracy of 91.8% and an area under the receiver operating characteristic curve 
+(AUC-ROC) of 0.99. Following pure culture, identification is completed within 5 min after a simple drying step 
+at 40 °C. With its minimal sample requirement, low cost, and operational simplicity, this platform demonstrates 
+significant potential as a point-of-care diagnostic tool, particularly in resource-constrained regions. This technology 
+offers a promising strategy to combat BSIs and improve patient outcomes.
+Keywords Pathogen identification, Droplet evaporation, Desiccation pattern, Deep learning
+Deep learning-driven morphological 
+fingerprinting: rapid, accurate and low-cost 
+pathogen identification via the analysis 
+of dried patterns of droplets
+Shujuan Guan1,2†, Ruyue Yang1,2†, Danning Deng3†, Huilin Long1,2†, Zihao Ou4, Xiaoxue Ge5, Xiujuan Jiang4, 
+Xiumei Hu4* and Dingqiang Chen1,2*
+
+===== PAGE 2 =====
+Page 2 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+Introduction
+Bloodstream infections (BSIs), critical systemic condi -
+tions characterized by pathogen invasion and rapid pro -
+liferation within the circulatory system, pose a grave 
+threat to global health. It is estimated that more than 
+250,000 cases of BSIs are recorded in hospitals annu -
+ally, with mortality rates exceeding 17% (defined as death 
+within 30  days of a positive blood culture), particularly 
+in low-income and resource-limited regions [ 1–6]. BSIs 
+are caused by diverse pathogens, primarily including 
+Gram-negative bacteria (e.g., Escherichia coli, Klebsiella 
+pneumoniae, Pseudomonas aeruginosa and Acinetobacter 
+baumannii), Gram-positive bacteria (e.g., Staphylococcus 
+aureus, Enterococcus faecium ) and fungi (e.g., Candida 
+albicans) [ 1, 2]. Timely and appropriate antibiotic ther -
+apy is critical for improving the prognosis of sepsis and 
+reducing mortality. However, the prolonged turnaround 
+time of conventional pathogen culture and identifica -
+tion often leads to empirical broad-spectrum antibiotic 
+administration during emergencies, potentially contrib -
+uting to the spread of multidrug-resistant pathogens [ 7, 
+8]. Studies have demonstrated that rapid and accurate 
+pathogen identification could mitigate antibiotic misuse, 
+aid in determining pathogenicity and guide therapeutic 
+adjustments, collectively facilitating personalized treat -
+ment and reducing medical expenses [ 9–11]. Conse -
+quently, the development of a rapid, accurate and simple 
+pathogen identification method holds critical clinical sig -
+nificance for the treatment of BSIs.
+In clinical practice, conventional pathogen identifi -
+cation primarily relies on automated systems, typically 
+requiring turnaround time exceeding 8–12  h. The iden -
+tification of microbial species is based on the detection 
+of metabolic byproduct alterations during the fission of 
+microorganisms, which is time-consuming and labor-
+intensive [ 12–14]. In recent years, matrix-assisted laser 
+desorption/ionization time-of-flight mass spectroscopy 
+(MALDI-TOF MS) has emerged as the gold standard 
+for pathogen identification. By analyzing characteristic 
+components like ribosomal proteins to generate spe -
+cies-specific fingerprint spectra, the identification can 
+be completed within several minutes [ 15–17]. However, 
+the high cost of equipment and dependence on skilled 
+personnel limit its accessibility, particularly in primary 
+care and resource-limited settings. Besides, molecular 
+detection methods such as polymerase chain reaction 
+(PCR) and metagenomic next-generation sequencing 
+(mNGS) also represent emerging approaches for micro -
+bial identification [18, 19]. These diagnostic methods also 
+encounter challenges owing to their intricate pre-analyt -
+ical workflows, equipment costs and time requirements, 
+thereby hindering widespread clinical application. Thus, 
+there is a critical demand for facile, rapid and low-cost 
+diagnostic techniques for the identification of pathogens 
+during the therapy of infections.
+Over the past several decades, interest has increas -
+ingly focused on the deposition patterns formed by the 
+drying of biologically-relevant sessile droplets [ 20–22]. 
+The evaporation of biofluids on solid surfaces, such as 
+Graphical Abstract
+
+
+===== PAGE 3 =====
+Page 3 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+glass slides, generates complex patterns influenced by 
+the presence and concentration of components (e.g., 
+cells, proteins, metabolites, inorganic ions) and particle 
+interactions/motions. Thus, these patterns could reflect 
+disease-induced compositional changes in biofluids 
+[23–28]. Critically, the desiccation patterns of microbial 
+suspensions also reveal variations in microbial composi -
+tion and motility [ 29–31]. For instance, Anusuya Pal et 
+al. observed that surfactants produced by P. aeruginosa 
+could induce intense Marangoni flows, resulting in uni -
+form deposition patterns after evaporation. In contrast, 
+E. coli , which lacked significant surfactant production, 
+accumulated at the droplet periphery forming ring-
+shaped deposits [ 32]. Furthermore, Cheng et al. demon -
+strated distinct cracking patterns in dried suspensions 
+between wild-type (motile) and mutant (tumbling/non-
+motile) strains of E. coli , probably attributed to the dif -
+ferences in bacterial movement and spatial organization 
+during evaporation [33]. These findings suggest that ana -
+lyzing the desiccation patterns of biological fluids could 
+offer efficient and straightforward diagnostic strategy for 
+component analysis and disease screening.
+In this proof-of-principle application, we have estab -
+lished a facile and accurate platform for the identifica -
+tion of common species in BSIs ( E. coli, K. pneumoniae, 
+P. aeruginosa, A. baumannii, S. aureus, E. faecium  and C. 
+albicans) through the interpretation of the dried patterns 
+formed by microbial suspensions on slides. The method -
+ology was based on a strategy of establishing an image 
+dataset of 10,055 dried droplet patterns from seven 
+species. The ResNet-34 deep learning model was then 
+employed to analyze the images and discern the subtle 
+differences [34–36]. The model provides an efficient and 
+objective foundation for dealing with large-scale image 
+datasets, achieving a classification accuracy of 91.8% and 
+an area under the ROC curve (AUC) of 0.99. The entire 
+process requires only 5  min and 2 μL of microbial sus -
+pension once pure culture is obtained, eliminating the 
+requirement for sophisticated instruments or special -
+ized personnel. This work demonstrates a user-friendly, 
+low-cost and intelligent tool for timely and precise BSIs 
+treatment.
+Materials and methods
+Reagents
+The blood agar plates (catalogue no. CP0160) used in this 
+study were purchased from Huankai Microbial Technol -
+ogy Co., Ltd. Sodium bicarbonate (NaHCO₃, catalogue 
+no. S432108) and 0.9% sodium chloride solution (cata -
+logue no. M485988) were obtained from Aladdin Bio -
+chemical Technology Co., Ltd. Erythrocyte lysis buffer 
+was purchased from Shanghai Acmec Biochemical Co., 
+Ltd (catalogue no. AR1010). All reagents were used with -
+out further purification. The adhesive glass slides were 
+purchased from Ctiotest Labware Manufacturing Co., 
+Ltd (catalogue no. 158105) and cleaned according to the 
+following steps. The slides were immersed in ethanol and 
+sonicated in an ultrasonic bath for at least 15 min. Then 
+the slides were rinsed in the deionized water (DI) and 
+allowed to be dried in an oven.
+Microbial strains
+A total of 2011 microbial isolates were used in this study. 
+The composition of the microbiological population was 
+310 strains of K. pneumoniae , 300 strains of E. coli , 312 
+strains of A. baumannii , 302 strains of S. aureus , 300 
+strains of P. aeruginosa, 240 strains of E. faecium , and 
+247 strains of C. albicans . The strains were collected 
+from Nanfang Hospital, Zhujiang Hospital, Guang -
+dong Province, China. All clinical isolates, obtained 
+from urine, blood culture, sputum, and wound speci -
+mens, were identified using MALDI-TOF MS accord -
+ing to standard protocols. The study was approved by 
+the Institutional Ethical Committee of Nanfang Hospital 
+(NFEC-202404-Q2).
+Dynamic evolution and analysis of the drying of microbial 
+suspensions
+A 2 μL aliquot of the microbial suspension was pipetted 
+onto a pre-cleaned glass slide. The slide was immediately 
+transferred to an inverted microscope equipped with 
+4 × and 40 × objectives for real-time monitoring of the 
+morphological evolution of the microbial suspensions 
+during evaporation at room temperature (30 ℃). Time-
+lapse images were captured at 10-s intervals to analyse 
+the dynamic changes in the patterns using an sCMOS 
+camera. Subsequently, the key parameters including the 
+drying kinetics, optical density dynamics and morpho -
+logical characteristics were further analyzed.
+Characterization of desiccation patterns using scanning 
+electron microscopy
+The microstructural characterization of the deposits 
+was performed with a Hitachi S-3000N scanning elec -
+tron microscopy (SEM). The deposits were coated with 
+a 50  nm gold–palladium layer via magnetron sputter -
+ing to minimize charging artifacts prior to observation. 
+Secondary electron detection mode was employed for 
+topographic imaging under optimized parameters: 15 kV 
+beam energy and 7.2 mm working distance.
+Establishment of image dataset comprising desiccation 
+patterns of microbial suspensions
+Microbial strains were cultured on blood agar plates 
+for 16–24 h prior to suspension preparation. Then, sev -
+eral colonies of each strain were picked and used to 
+prepare suspensions in NaHCO 3 buffer (100  mM, pH 
+9.6), adjusting to an optical density of 0.25 at 600  nm. 
+
+===== PAGE 4 =====
+Page 4 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+A two-microliter aliquot of the microbial suspension 
+was deposited onto a pre-cleaned adhesive glass slide, 
+with five replicates per isolate. Then the samples were 
+allowed to be evaporated in the oven under the identi -
+cal conditions at humidity of 20% ± 3% and temperature 
+of 40  °C ± 0.5  °C for 5  min. After complete evaporation, 
+the desiccation patterns were imaged using a Nikon 
+inverted microscope (ECLIPSE Ti2). Bright-field images 
+were acquired under identical parameters (including 
+light intensity and exposure time) using a 4 × objective. 
+All clinical strains were prepared with the standard pro -
+cedure to ensure the reproducibility. A dataset consist -
+ing of 10,055 images across 7 species ( K. pneumoniae  
+(n = 1550), E. coli  (n = 1500), A. baumannii (n = 1560), S. 
+aureus (n = 1510), P. aeruginosa  (n = 1500), E. faecium  
+(n = 1200), C. albicans (n = 1235)) was established for sub-
+sequent analysis.
+Training and testing of the deep learning model
+In order to develop a deep learning system for species 
+classification, the image dataset was split into three inde -
+pendent sets for training, validation, and testing in a 7:1:2 
+ratio. The proportional distribution of images across dif -
+ferent species was maintained in all subsets. The details 
+of these data are presented in Fig. 6.
+A uniform image preprocessing pipeline was applied to 
+all images in the training, validation, and testing sets. All 
+images were resized to 224 × 224 pixels, and pixel values 
+were normalized to [0, 1]. The scaled values were stan -
+dardized using the mean and standard deviation derived 
+from the ImageNet dataset. The original images were 
+acquired under highly standardized conditions (includ -
+ing light intensity and exposure time) with minimal noise 
+and uniform illumination. Consequently, no additional 
+preprocessing techniques were employed.
+The ResNet-34 architecture was employed for species 
+classification based on desiccation patterns. The model 
+was initialized with pre-trained weights from ImageNet. 
+The final fully-connected layer was replaced and fine-
+tuned on the target dataset during transfer learning. 
+The network primarily consists of: (1) an initial feature 
+extraction module, (2) four residual stages incorporat -
+ing identity mapping, and (3) a classification head. The 
+model was optimized using stochastic gradient descent 
+(SGD) with a learning rate of 0.0002 and a momentum 
+of 0.9. Detailed architectures are provided in the Supple -
+mentary Information.
+The accuracy, precision, recall, specificity, F1-score 
+and AUC were analyzed to evaluate the performance and 
+effectiveness of the model (True Positive: TP , True Nega-
+tive: TN, False Positive: FP , False Negative: FN).
+ 
+Accuracy =( TP + TN ) / (TP + FP + TN + FN )
+P recision = TP/ (TP + FP )
+Recall = TP/ (TP + FN )
+Specif icity = T N/ (TN + FP )
+F 1−Score =2 ∗ P recision ∗ Recall/ (P recision + Recall)
+The ROC curve graphically represents the performance 
+of classification model across all classification thresh -
+olds. It plots the True Positive Rate (TPR) against the 
+False Positive Rate (FPR), where TPR = TP/(TP + FN) and 
+FPR = FP/(FP + TN). The AUC is calculated by integrating 
+the TPR with respect to the FPR over the interval [0, 1]. It 
+represents the probability that the model ranks a random 
+positive instance higher than a random negative instance.
+ 
+AUC =
+ˆ 1
+0
+TPR(FPR)d(FPR)
+Quantitative analysis of the characteristics of desiccation 
+patterns
+The images were analyzed using RS Image software. All 
+images were adjusted to 8-bit gray values. An appropri -
+ate threshold value was set to segment features from the 
+background. For the analysis of the total area and mean 
+gray value of desiccation patterns, the threshold was set 
+according to the "MaxEntropy" algorithm provided by 
+the software to automatically identify the features of the 
+patterns and output the analysis results. The morphology 
+and grayscale changes of droplets during the evaporation 
+process were further analyzed.
+Collection of microbial cells from positive blood cultures
+A five-milliliter aliquot from positive blood culture 
+specimen was centrifuged at 1,000 × g for 5 min, and the 
+supernatant was collected. The supernatant was then 
+subjected to high-speed centrifugation at 15,600 × g for 
+3  min. The resulting pellet was incubated with erythro -
+cyte lysis buffer for 8 min and subsequently harvested by 
+centrifugation (15,600 × g, 3 min). After two washes with 
+pure water under identical centrifugal conditions, the 
+final pellet was resuspended in 100  mM NaHCO₃ buf -
+fer. The optical density of the suspension was measured 
+at 600 nm and adjusted to the target concentration using 
+the same buffer. The suspensions acquired were then 
+dried under the controlled conditions for the analysis of 
+desiccation patterns.
+Results
+Species-specific morphological fingerprints in the 
+desiccation patterns from microbial suspensions
+To investigate the characteristics of desiccation patterns 
+formed by microbial suspensions, we selected seven 
+common bloodstream infection pathogens— K. pneu -
+moniae, E. coli , A. baumannii , P. aeruginosa, S. aureus , 
+
+===== PAGE 5 =====
+Page 5 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+E. faecium , and C. albicans  as model strains based on 
+epidemiological data [ 1, 2]. Pure colonies were picked 
+and resuspended in carbonate buffer to prepare micro -
+bial suspensions. Carbonate buffer, a kosmotropic agent 
+in the Hofmeister series, was selected to amplify pro -
+tein–protein interactions through preferential hydration 
+effects, thereby enhancing pattern formation via salting-
+out mechanisms. Following the procedures detailed in 
+the Methods section, deposition experiments were per -
+formed by dispensing 2 μL aliquots onto glass substrates 
+and the desiccation patterns were captured with consis -
+tent illumination parameters. This standardized process 
+ensures that the differences in desiccation patterns pri -
+marily originate from the inherent biological properties 
+of the microorganisms.
+Figure  1 illustrates the typical characteristics of the 
+desiccation patterns across seven species. The droplet 
+depositions were reproducible and exhibited an average 
+diameter of 2.0 ± 0.1  mm (Fig.  1c). Regarding the struc -
+tural features, patterns derived from the same species 
+demonstrated a high degree of similarity, while distinct 
+differences were observed between different species. 
+As depicted in Fig.  1b, dried droplets of K. pneumoniae  
+exhibited a uniform deposition accompanied by promi -
+nent cracking structures. Conversely, dried droplets from 
+E. coli, A. baumannii, P. aeruginosa, S. aureus, and E. 
+faecium formed punctate structures with varying sizes 
+and quantities, surrounded by minor cracking. Through 
+the threshold analysis, notable differences were iden -
+tified in terms of the area proportion of the region of 
+interest (ROI) as well as the quantity of punctate struc -
+tures within the dried droplets across different species 
+(Fig.  1d). As for C. albicans , the morphology of dried 
+droplets primarily appeared as a filamentous network 
+structure that showed significant divergence compared 
+to the aforementioned patterns (Fig.  1b). Additionally, 
+deposits formed from the same sample exhibited excel -
+lent reproducibility in droplet size and grayscale char -
+acteristics, indicating high stability and repeatability 
+throughout the process (Figure S1). Furthermore, the 
+desiccation patterns of microbial suspensions appeared 
+consistently at heating temperatures ranging from 30 °C 
+to 40  °C during evaporation (Figure S2), confirming the 
+robustness of the method and its applicability for on-site 
+detection under varying environmental conditions. These 
+findings collectively suggested that species-specific mor -
+phological features are present in the desiccation patterns 
+across different species, potentially associated with varia -
+tions in microbial cellular composition and movement 
+patterns during droplet evaporation. Further analysis of 
+the fingerprints of these dried deposits could potentially 
+be developed into a novel, rapid and facile approach for 
+species identification.
+Dynamic evolution of the drying of microbial droplets
+To further explore the fundamental mechanisms govern -
+ing the formation of desiccation patterns, we investigated 
+the morphological dynamics during the evaporation of 
+microbial droplets. The microbial suspension was depos -
+ited onto a glass slide and immediately transferred to an 
+inverted microscope equipped with 4 × and 40 × objec-
+tives for real-time monitoring at room temperature 
+(30 °C). Imaging with a 40 × objective enables the visual -
+ization of higher-resolution details of crystal structures, 
+microbial arrangements, and dynamic processes during 
+evaporation (e.g., coffee-ring formation, crystal growth). 
+Evaporation at 30  °C extended the drying time from 
+approximately 1020 s to 1100 s without significantly alter-
+ing the resulting desiccation patterns, as shown in Figure 
+S2. Figure 2 depicts the drying evolution of droplets. This 
+evaporation process exhibited a two-stage progression: 
+(I) moisture vaporization stage and (II) crystallization 
+stage. Throughout stage I, the droplets presented a uni -
+form appearance, and their morphological characteristics 
+and evaporation dynamics remained consistent across 
+all species. Divergence occurred only during the crystal -
+lization stage, when crystal structures emerged from the 
+supersaturated solution.
+(I) Moisture vaporization stage: Upon deposition on 
+the glass slide surface, the sessile droplet initially exhib -
+ited a spherical cap morphology. During evaporation 
+(approximately 0 to 1000  s), the droplet gradually flat -
+tened. Concurrently, dynamic imaging revealed a con -
+tinuous decrease in the gray value (Fig.  2, Fig.  3, Movies 
+S1-S7). All images for grayscale analysis were acquired 
+with a 4 × objective, encompassing the entire drop -
+let. Simultaneously, microscopic observations showed 
+that individual microorganisms continuously migrated 
+from the central region of the droplet towards the edge, 
+where they accumulated and formed a ring-like structure 
+(Fig.  4). This phenomenon is known as the coffee-ring 
+effect (Figure S3). At the beginning of evaporation, due 
+to the higher evaporation rate at the edge of the drop -
+let, a radially outward capillary flow from center to the 
+periphery was developed [ 37, 38]. This flow transported 
+suspended particles such as microorganisms to the 
+periphery, leading to the enrichment and ring formation.
+(II) Crystallization stage: During the latter stage of 
+droplet evaporation, the gradual reduction in water 
+content led to an increase in NaHCO 3 concentration. 
+When the concentration exceeded its solubility, the 
+solution became supersaturated, initiating the crystal -
+lization of NaHCO 3. As illustrated in Fig.  4, Movies 
+S8-S14, NaHCO 3 nucleation occurred at the periphery 
+of the droplet and rapidly propagated towards the cen -
+tral region, forming a skeletal crystalline structure within 
+20–50 s. This crystallization event was marked by a dis -
+tinct, rapid increase in the gray value. The quantitative 
+
+===== PAGE 6 =====
+Page 6 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+grayscale analysis provided a clear signature of the crys -
+tallization phase, which was consistent across species but 
+exhibited subtle, species-specific variations in timing and 
+intensity (Fig. 3).
+During this crystallization process, individual microor -
+ganisms were mechanically entrapped within the inter -
+stitial spaces of the growing crystals, thereby suppressing 
+their migration toward the edge of the droplet. Addi -
+tionally, electrostatic repulsion between the negatively 
+charged crystal surfaces (NaHCO 3) and microbial cells 
+(typically carrying negative surface charges) likely con -
+fined the microorganisms to specific regions. After com -
+plete evaporation, crystal-microorganism composite 
+structures were observed at the periphery of the droplet, 
+Fig. 1 Species-specific desiccation patterns of microbial suspensions. (a) The workflow for the deposition and evaporation of microbial suspensions. (b) 
+Distinct morphological characteristics of dried microbial suspensions across seven species ( K. pneumoniae, E. coli, A. baumannii, P . aeruginosa, S. aureus, E. 
+faecium and C. albicans). Scale bar: 500 μm. (c, d) Quantitative analysis of the total pattern area and the area ratio of the region of interest (ROI)
+ 
+
+===== PAGE 7 =====
+Page 7 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+while the central region primarily exhibited aggregates 
+of microbial cells alongside sparse composite deposits. 
+Collectively, the species-specific variations in crystalliza -
+tion dynamics revealed by quantitative grayscale analysis 
+(Fig.  3) likely stem from differential spatial distribution 
+and entrapment of microbial cells within the crystal 
+matrix, ultimately contributing to the formation of dis -
+tinct, species-specific desiccation patterns.
+Notably, the deposition patterns of microbial suspen -
+sions after evaporation exhibited high intra-species 
+consistency but significant inter-species variation. To 
+further explore this phenomenon, SEM was employed 
+to analyze the microscopic composition. As shown in 
+Fig. 5, the peripheral region predominantly consisted of 
+crystal-microorganism composites, whereas the central 
+region comprised distinct microbial deposition aggre -
+gates. Evidence from droplet drying studies indicates that 
+the morphology of desiccation patterns is fundamen -
+tally governed by the physicochemical properties of the 
+solutes [ 39]. In line with this, the observations by SEM 
+(Fig.  5) revealed distinct microstructural arrangements 
+in the central and peripheral regions of dried droplets, 
+which exhibited species-specificity. We therefore hypoth-
+esize that these pattern differences arise from interspe -
+cies divergence in key biophysical properties—such as 
+membrane flexibility, surface roughness, surface charge, 
+and motility [ 29–33, 40–43]. These inherent characteris -
+tics might modulate microbial interactions with crystal -
+lizing solutes and their responses to evaporation-driven 
+hydrodynamic forces. Given the multifactorial nature of 
+pattern formation, future systematic investigations are 
+essential to fully elucidate the mechanistic principles 
+underlying pattern formation.
+Establishment of image dataset consisting of the 
+desiccation patterns
+To explore the potential and feasibility of utilizing the 
+desiccation patterns of microbial suspension as a rapid, 
+cost-effective tool for pathogen identification, we col -
+lected a total of 2,011 clinical isolates across seven species 
+Fig. 2 The dynamic evolution of microbial droplets dried at 30 °C was recorded using a 4 × objective. Scale bar: 500 μm
+ 
+
+===== PAGE 8 =====
+Page 8 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+to construct an image dataset (the number of strains per 
+species is detailed in the Methods section). A deep learn -
+ing-based prediction model would be employed for spe -
+cies classification in subsequent assays, addressing the 
+subjectivity and variability from the manual interpreta -
+tion as well as discovering the subtle associations which 
+are undetectable and unexplainable by human observers 
+(Scheme 1).
+As described previously, microbial suspensions were 
+prepared in 100  mM carbonate buffer following pure 
+colony culture. The initial concentration of microbial 
+suspensions critically determined the characteristics of 
+desiccation patterns. Specifically, a high concentration 
+(1 OD 600) promoted cell aggregation into homogeneous 
+deposits (e.g., K. pneumoniae), while a low concentration 
+(0.125 OD 600) resulted in sparse cellular distributions 
+that lacked identifiable fingerprint-like signatures (Fig -
+ure S4, Figure S5). To ensure optimal reproducibility, the 
+initial concentration of all microbial suspensions were 
+standardized to 0.25 OD 600 for all subsequent assays. For 
+each isolate, five replicates of a 2-μL suspension were 
+deposited onto a glass slide and allowed to evaporate at 
+40℃. The desiccation patterns were then captured using 
+a 4 × objective for image acquisition, as described in the 
+Methods section. Thus, an image dataset comprising 
+10,055 images of desiccation patterns from microbial 
+suspensions across seven species was established. The 
+images were further labeled according to the source of 
+species ( K. pneumoniae “0” , E. coli “1” , A. baumannii “2” , 
+S. aureus  “3” , P. aeruginosa “4” , E. faecium  “5” , C. albi -
+cans “6”). To develop a deep learning system for species 
+classification, the image dataset was randomly parti -
+tioned into three independent subsets for training, vali -
+dation and testing at a ratio of 7:1:2. Details of the dataset 
+are presented in Fig. 6.
+Deep learning-driven species identification based on 
+desiccation patterns
+To validate the feasibility of deep learning driven single-
+species identification via desiccation pattern analysis, we 
+employed the ResNet-34 architecture for the subsequent 
+analysis. It was selected for its optimal balance between 
+depth and representational capacity, as its residual con -
+nections mitigate the vanishing gradient problem and 
+facilitate learning fine-grained features, which are 
+essential for discerning subtle inter-species differences. 
+Preliminary benchmarking within the ResNet series cor -
+roborated these technical advantages, confirming that 
+ResNet-34 outperformed ResNet-18 (Figure S6, Table 
+S1). To circumvent the typical demands of large anno -
+tated datasets and extensive training time, we utilized 
+transfer learning by fine-tuning a ResNet-34 model pre-
+trained on ImageNet [ 44]. The fine-tuned model was 
+evaluated on a testing set and selected as the final predic -
+tive model.
+The architecture and training details of the algorithm 
+are provided in the Supplementary Information and sum-
+marized in Fig.  7. ResNet-34 consists of three principal 
+components: (1) an initial convolution-pooling module 
+that captures low-level spatial patterns from input images 
+and reduces feature map dimensions while retaining criti-
+cal information; (2) residual stages with skip connections, 
+Fig. 3 Analysis of the mean gray value of patterns during evaporation across different species. (a) Schematic diagram depicting the time-lapse grayscale 
+changes of a droplet during the drying process. (b, c, d, e, f, g, h) Dynamic grayscale evolution during droplet evaporation for different species (K. pneu-
+moniae, E. coli, A. baumannii, P . aeruginosa, S. aureus, E. faecium and C. albicans). Error bars represent standard deviation from three replicates
+ 
+
+===== PAGE 9 =====
+Page 9 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+which form the core innovation of ResNet-34, enabling 
+effective training of deep networks by mitigating gradi -
+ent vanishing and stabilizing learning dynamics, and (3) a 
+classification module that employs global average pooling 
+to condense spatial features, followed by a fully connected 
+layer and softmax activation to generate probabilistic 
+classification outputs [45]. Subsequently, the AUC, accu -
+racy, precision, recall, specificity and F1 -Score were ana -
+lyzed to evaluate the performance of the model (Fig.  8, 
+Figure S7). The model demonstrated exceptional discrim-
+inatory power in the classification task, achieving a near-
+perfect AUC of 0.99 and a robust accuracy of 91.8%. The 
+precision, recall, specificity and F1-Score reached 0.9021, 
+0.8992, 0.9225 and 0.8993 respectively. The high preci -
+sion and specificity indicate a strong ability to minimize 
+false positives, while the high recall reflects the effective 
+minimization of false negatives. The balanced F1-score 
+further confirms the model’s robustness across all micro -
+bial categories. Furthermore, the AUC provides a robust, 
+threshold-independent evaluation metric that mitigates 
+potential biases from class imbalance. This is particularly 
+valuable as skewed class distribution can inflate accuracy 
+and render threshold-sensitive metrics like precision 
+and recall less reliable. In contrast, by assessing perfor -
+mance across all classification thresholds, AUC offers a 
+more comprehensive and stable measure of the model’s 
+inherent discriminative ability. Collectively, these results 
+underscore the model’s strong potential for high-confi -
+dence species identification.
+Detailed species-specific model performance is pre -
+sented in Fig.  8b-d. Overall, the AUC for each species 
+ranged from 0.96 to 1.00 (Fig.  8b), with slightly lower 
+Fig. 4 The dynamic evolution of microbial droplets dried at 30 °C was recorded under a microscope (40 × objective). Scale bar: 20 μm
+ 
+
+===== PAGE 10 =====
+Page 10 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+Scheme 1. Schematic of the deep learning-driven assay protocol for species classification using desiccation patterns of microbial suspension
+ 
+Fig. 5 Microscopic analysis of the central and peripheral regions in desiccation patterns across different species was performed using SEM
+ 
+
+===== PAGE 11 =====
+Page 11 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+accuracy for E. coli and P. aeruginosa (Fig. 8c). This minor 
+reduction in accuracy might arise from intra-species 
+morphological and phenotypic diversity (e.g., mucoid vs. 
+non-mucoid phenotypes), which could introduce vari -
+ability in desiccation patterns and consequently impact 
+model performance. To investigate such phenotypic 
+diversity, representative non-mucoid and mucoid strains 
+of E. coli and P. aeruginosa were selected for comparative 
+analysis. As shown in Figure S8, non-mucoid and mucoid 
+strains of E. coli and P. aeruginosa exhibited differences in 
+colony morphologies and desiccation patterns. The des -
+iccation patterns of mucoid strains exhibited a reduction 
+in the central punctate structures compared to those of 
+non-mucoid strains. Accordingly, the model misclassified 
+one of the mucoid E. coli strains as P. aeruginosa. These 
+findings highlight the necessity of incorporating strain-
+level phenotypic diversity into future training datasets to 
+improve model generalizability and clinical utility. Addi -
+tionally, we retrospectively evaluated the effect of antimi-
+crobial susceptibility variability on model performance by 
+Fig. 7 The major architecture of the ResNet 34 model
+ 
+Fig. 6 Statistical information of the image dataset formed by the desiccation patterns of microbial suspensions across seven species
+ 
+
+===== PAGE 12 =====
+Page 12 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+analyzing critical resistance profiles among the strains in 
+the testing set, such as carbapenem resistance in Entero-
+bacter and oxacillin resistance in S. aureus. Classification 
+accuracy remained comparable between susceptible and 
+resistant subgroups for K. pneumoniae (92.7% vs. 88.7%), 
+E. coli (85.5% vs. 87.9%) and S. aureus  (94.6% vs. 94.3%) 
+(Figure S9, Table S2). These results suggest that species-
+specific morphological fingerprints are resilient to these 
+resistance mechanisms. Future work will be necessary 
+to determine whether this finding extends to a broader 
+spectrum of resistance mechanisms.
+Fig. 8 Performance evaluation of the ResNet-34 model for species classification. ( a) Distribution of image labels across species. ( b, c) ROC curves and 
+the corresponding confusion matrix of the seven-class classifier. (d) Model performance metrics including precision, recall, specificity, F1-score and AUC
+ 
+
+===== PAGE 13 =====
+Page 13 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+To explore whether the approach could be extended to 
+direct blood or clinical fluid samples, we enriched micro -
+bial cells from 24 positive blood culture samples (includ -
+ing K. pneumoniae, E. coli, and S. aureus) using gradient 
+centrifugation and cell lysis to remove erythrocytes and 
+leukocytes. The pellets were resuspended in 100  mM 
+NaHCO3 buffer and the desiccation patterns of the 
+microbial suspensions for each sample were acquired and 
+analyzed following the standardized method described 
+above. The prediction results demonstrated the prelimi -
+nary feasibility of the approach, except for one of the E. 
+coli isolates that was misclassified as A. baumannii (Fig-
+ure S10). However, challenges remain for direct applica -
+tion to clinical specimens due to sample complexity, such 
+as variable microbial loads and interference from host 
+components. Future improvements could integrate short-
+term enrichment or microfluidic-based concentration 
+to enhance microbial recovery without relying on pro -
+longed culture. In summary, these results demonstrated 
+that species-specific desiccation patterns of microbial 
+suspensions could be efficiently and accurately classified 
+using deep learning algorithms, highlighting the potential 
+for establishing a facile, rapid and automatic platform for 
+the identification of pathogens.
+Grad-CAM analysis revealed dominant feature in the 
+prediction model
+To elucidate the decision-making mechanisms of the 
+deep learning model in image interpretation, gradient-
+weighted class activation mapping (Grad-CAM) was 
+employed. This interpretability technique computes the 
+gradients of the class scores with respect to the activa -
+tions in the final convolutional layer. The resulting gra -
+dient magnitudes reflect the importance of each neuron 
+in the feature map for the classification decision, thereby 
+highlighting the discriminative image features used by 
+the model to differentiate among classes.
+Figure 9 demonstrates both the desiccation patterns of 
+microbial droplets and their corresponding Grad-CAM 
+visualizations. Critical regions with elevated gradient 
+magnitudes (indicated by warm colors in the heatmap) 
+represent regions that predominantly influenced the 
+classification outcomes. Our findings revealed that the 
+central regions of desiccation patterns, characterized by 
+high activation weights, contributed significantly to the 
+discrimination while the peripheral background elements 
+provided negligible predictive information. The results of 
+Grad-CAM analysis were consistent with those obtained 
+from SEM, indicating that differences in microbial 
+arrangement and crystal structure in the central region of 
+desiccation patterns were dominant factors influencing 
+the decision-making mechanism of the prediction model.
+Discussion
+In this study, we present a simple, rapid, and cost-effec -
+tive diagnostic platform for species identification by 
+leveraging the deep learning-driven analysis of desic -
+cation patterns from microbial suspensions. First, we 
+demonstrated that the desiccation patterns from micro -
+bial suspensions encoded species-specific morphologi -
+cal signatures, driven by complex interactions between 
+microorganisms, hydrodynamic forces, and solute crys -
+tallization during droplet evaporation [ 21, 25]. Second, 
+we constructed an image dataset comprising 10,055 
+desiccation patterns across seven common pathogens. 
+Subsequently, we developed an AI-driven platform that 
+achieved a species-level identification accuracy of 91.8% 
+with an AUC of 0.99. This method offers significant 
+advantages including low cost, operational simplicity, and 
+high accuracy.
+In contrast, established gold-standard methods such 
+as MALDI-TOF MS, PCR, or mNGS excel in sensitiv -
+ity and broad-spectrum identification [ 46–48], but they 
+often entail long turnaround times, high costs, and cen -
+tralized laboratory settings. In addition, existing imaging 
+Fig. 9 The Grad-CAM visualizations of the desiccation patterns from microbial droplets across different species
+ 
+
+===== PAGE 14 =====
+Page 14 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+or AI-based microbial identification techniques including 
+morphology-based microscopic detection and Raman/
+Surface Enhanced Raman Spectroscopy (SERS) coupled 
+with machine learning typically rely on high-resolution 
+cellular data, fluorescent labeling, and sophisticated 
+instruments (e.g., super-resolution or Raman micro -
+scopes) [ 49–54], which might limit their accessibility 
+in resource-limited settings. In comparison, the novel 
+approach requires no staining, uses minimal sample vol -
+ume, and needs only basic bright-field microscopy, signif-
+icantly lowering both cost and operational complexity. By 
+eliminating the reliance on sophisticated instrumentation 
+and specialized personnel, this method is particularly 
+suitable for minimally trained users in resource-limited 
+environments.
+The current study primarily focuses on demonstrating 
+the feasibility of deep learning-driven desiccation pat -
+tern analysis to identify single-species infections, which 
+serves as a foundational step. A key future direction is the 
+systematic expansion of the pathogen library to include 
+a broader spectrum of clinically relevant species, par -
+ticularly rare and emerging pathogens. This effort will 
+improve the model’s generalizability by training it on 
+more diverse morphological signatures. Furthermore, 
+given that polymicrobial infections are common and 
+diagnostically challenging [55, 56], adapting this platform 
+for such cases is a priority. Promising strategies include 
+developing multi-label classification models trained on 
+synthetic mixed suspensions, or using spatial pattern 
+segmentation to resolve overlapping features. These 
+enhancements would significantly boost the clinical util -
+ity of novel approach in complex, real-world scenarios.
+Furthermore, a deeper investigation into the mecha -
+nisms underlying the formation of desiccation patterns 
+from microbial suspensions is required, focusing on key 
+physicochemical processes such as capillary flow, the 
+coffee-ring effect, and crystallization dynamics [ 21, 25]. 
+Concurrently, relevant biophysical parameters of the 
+microorganisms such as surface hydrophobicity, mem -
+brane elasticity, secretory metabolites, and other intrin -
+sic biological traits could be systematically investigated 
+to clarify their regulatory roles in pattern formation [ 40, 
+41]. Integrating these mechanistic insights with quantifi -
+able biological features would enable the construction of 
+a multimodal data architecture. Such efforts are expected 
+not only to enhance classification performance but also 
+to provide a more explainable framework for AI-driven 
+diagnosis, thereby establishing a more robust and inter -
+pretable connection between biophysical mechanisms 
+and algorithmic decision-making.
+Although limitations persist (e.g., prerequisite patho -
+gen isolation/culture and a limited number of distin -
+guishable species), future improvements in sample 
+preparation, database scale and diversity, and algorithmic 
+performance are poised to broaden its applicability. 
+Building upon this foundation, a key future direction 
+involves integrating ubiquitous mobile technology. A 
+dedicated smartphone application, coupled with an 
+affordable clip-on lens, could enable the capture of des -
+iccation patterns directly at the point of care. These 
+images would be transmitted to a cloud server running 
+the optimized AI model for analysis and species identifi -
+cation, with results swiftly returned to the user’s device. 
+This mobile-to-cloud architecture promises to democra -
+tize access to advanced diagnostics, transforming smart -
+phones into portable identification tools.
+Conclusion
+Rapid and accurate pathogen identification is essential 
+for the treatment of BSIs. In this work, we revealed that 
+the desiccation patterns of microbial suspensions encode 
+species-specific morphological signatures. By leverag -
+ing deep learning-driven analysis, we established a user-
+friendly, low-cost, and intelligent platform for species 
+classification, providing a promising strategy for patho -
+gen identification. This platform shows the potential to 
+be integrated with mobile technology for point-of-care 
+applications, particularly in settings where traditional 
+laboratory infrastructure is scarce.
+Supplementary Information
+The online version contains supplementary material available at  h t t p  s : /  / d o i  . o  r 
+g /  1 0 .  1 1 8 6  / s  1 2 9 5 1 - 0 2 5 - 0 3 9 2 3 - 9.
+Additional file 1
+Additional file 2
+Additional file 3
+Additional file 4
+Additional file 5
+Additional file 6
+Additional file 7
+Additional file 8
+Additional file 9
+Additional file 10
+Additional file 11
+Additional file 12
+Additional file 13
+Additional file 14
+Additional file 15
+Acknowledgements
+We thank Department of Laboratory Medicine of Nanfang hospital, 
+Department of Laboratory Medicine of Zhujiang hospital for collecting clinical 
+strains for this study.
+
+===== PAGE 15 =====
+Page 15 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+Author contributions
+Shujuan Guan, Ruyue Yang, Danning Deng and Huilin Long contributed 
+equally to this work. Conceptualization: Guan SJ, Yang RY, Hu XM, Chen DQ. 
+Method: Guan SJ, Yang RY, Deng DN, Long HL. Investigation: Guan SJ, OU ZH, 
+Ge XX, Jiang XJ. Project management: Guan SJ, Hu XM, Chen DQ. Supervision: 
+Hu XM, Chen DQ. Writing First Draft: Guan SJ, Yang RY, Deng DN, Long HL. 
+Writing—Reviewing and Editing: Guan SJ, Hu XM, Chen DQ.
+Funding
+This work was supported by the Youth Cultivation Project of Zhujiang Hospital 
+Presidential Fund (yzjj2024qn37) and Guangdong Provincial Clinical Research 
+Center for Laboratory Medicine (2023B110008).
+Data availability
+The datasets used and/or analysed during the current study are available from 
+the corresponding author on reasonable request.
+Declarations
+Ethics approval and consent to participate
+The study was approved by the institutional ethical committees of the 
+Nanfang Hospital (NFEC-202404-Q2).
+Consent for publication
+All authors have approved the manuscript and agree for the submission.
+Competing interests
+The authors declare no competing interests.
+Author details
+1Microbiome Medicine Center, Department of Laboratory Medicine, 
+Zhujiang Hospital, Southern Medical University, Guangzhou  
+510260, China
+2Guangdong Provincial Clinical Research Center for Laboratory Medicine, 
+Guangzhou 510260, China
+3Department of Laboratory Medicine, The Sixth Affiliated Hospital, Sun 
+Yat-Sen University, Guangzhou 510655, China
+4Department of Laboratory Medicine, Nanfang Hospital, Southern 
+Medical University, Guangzhou 510515, China
+5Department of Laboratory Medicine, The First Affiliated Hospital of 
+University of Science and Technology of China, Hefei 230031, China
+Received: 16 August 2025 / Accepted: 2 December 2025
+References
+1. Holmes CL, Albin OR, Mobley H, Bachman MA. Bloodstream infections: 
+mechanisms of pathogenesis and opportunities for intervention. Nat Rev 
+Microbiol. 2025;23:210–24.
+2. Kontula K, Skogberg K, Ollgren J, Jarvinen A, Lyytikainen O. Population-
+based study of bloodstream infection incidence and mortality rates, Finland, 
+2004–2018. Emerg Infect Dis. 2021;27:2560–9.
+3. Diekema DJ, Hsueh PR, Mendes RE, Pfaller MA, Rolston KV, Sader HS, et 
+al. The microbiology of bloodstream infection: 20-year trends from the 
+SENTRY antimicrobial surveillance program. Antimicrob Agents Chemother. 
+2019;63:e00355-19.
+4. Wisplinghoff H, Bischoff T, Tallent SM, Seifert H, Wenzel RP , Edmond MB. Noso-
+comial bloodstream infections in US hospitals: analysis of 24,179 cases from a 
+prospective nationwide surveillance study. Clin Infect Dis. 2004;39:309–17.
+5. Marra AR, Camargo LF, Pignatari AC, Sukiennik T, Behar PR, Medeiros EA, et al. 
+Nosocomial bloodstream infections in Brazilian hospitals: analysis of 2,563 
+cases from a prospective nationwide surveillance study. J Clin Microbiol. 
+2011;49:1866–71.
+6. Verway M, Brown KA, Marchand-Austin A, Diong C, Lee S, Langford B, et al. 
+Prevalence and mortality associated with bloodstream organisms: a popula-
+tion-wide retrospective cohort study. J Clin Microbiol. 2022;60:e242921.
+7. Micek ST, Hampton N, Kollef M. Risk factors and outcomes for ineffective 
+empiric treatment of sepsis caused by Gram-negative pathogens: stratifica-
+tion by onset of infection. Antimicrob Agents Chemother. 2018;62:e00007-18.
+8. Marquet K, Liesenborgs A, Bergs J, Vleugels A, Claes N. Incidence and out-
+come of inappropriate in-hospital empiric antibiotics for severe infection: a 
+systematic review and meta-analysis. Crit Care. 2015;19:63.
+9. Yahav D, Franceschini E, Koppel F, Turjeman A, Babich T, Bitterman R, et al. 
+Seven versus 14 days of antibiotic therapy for uncomplicated Gram-negative 
+bacteremia: a noninferiority randomized controlled trial. Clin Infect Dis. 
+2019;69:1091–8.
+10. Holland TL, Raad I, Boucher HW, Anderson DJ, Cosgrove SE, Aycock PS, et al. 
+Effect of algorithm-based therapy vs usual care on clinical success and seri-
+ous adverse events in patients with staphylococcal bacteremia: a random-
+ized clinical trial. JAMA. 2018;320:1249–58.
+11. Von Dach E, Albrich WC, Brunel AS, Prendki V, Cuvelier C, Flury D, et al. Effect 
+of C-reactive protein-guided antibiotic treatment duration, 7-day treat-
+ment, or 14-day treatment on 30-day clinical failure rate in patients with 
+uncomplicated Gram-negative bacteremia: a randomized clinical trial. JAMA. 
+2020;323:2160–9.
+12. Trenholme GM, Kaplan RL, Karakusis PH, Stine T, Fuhrer J, Landau W, et al. 
+Clinical impact of rapid identification and susceptibility testing of bacterial 
+blood culture isolates. J Clin Microbiol. 1989;27:1342–5.
+13. Van Belkum A, Bachmann TT, Ludke G, Lisby JG, Kahlmeter G, Mohess A, et al. 
+Developmental roadmap for antimicrobial susceptibility testing systems. Nat 
+Rev Microbiol. 2019;17:51–62.
+14. Gajic I, Kabic J, Kekic D, Jovicevic M, Milenkovic M, Mitic CD, et al. Antimi-
+crobial susceptibility testing: a comprehensive review of currently used 
+methods. Antibiotics (Basel). 2022;11:427.
+15. Seng P , Drancourt M, Gouriet F, La Scola B, Fournier PE, Rolain JM, et al. 
+Ongoing revolution in bacteriology: routine identification of bacteria by 
+matrix-assisted laser desorption ionization time-of-flight mass spectrometry. 
+Clin Infect Dis. 2009;49:543–51.
+16. Carbonnelle E, Grohs P , Jacquier H, Day N, Tenza S, Dewailly A, et al. Robust-
+ness of two MALDI-TOF mass spectrometry systems for bacterial identifica-
+tion. J Microbiol Methods. 2012;89:133–6.
+17. Jang KS, Kim YH. Rapid and robust MALDI-TOF MS techniques for microbial 
+identification: a brief overview of their diverse applications. J Microbiol. 
+2018;56:209–16.
+18. Mackay IM. Real-time PCR in the microbiology laboratory. Clin Microbiol 
+Infect. 2004;10:190–212.
+19. Wojno KJ, Baunoch D, Luke N, Opel M, Korman H, Kelly C, et al. Multiplex 
+PCR based urinary tract infection (UTI) analysis compared to traditional urine 
+culture in identifying significant pathogens in symptomatic patients. Urology. 
+2020;136:119–26.
+20. Routh AF. Drying of thin colloidal films. Rep Prog Phys. 2013;76:46603.
+21. Parsa M, Harmand S, Sefiane K. Mechanisms of pattern formation from dried 
+sessile drops. Adv Colloid Interface Sci. 2018;254:22–47.
+22. Zang D, Tarafdar S, Tarasevich YY, Dutta Choudhury M, Dutta T. Evaporation of 
+a droplet: from physics to applications. Phys Rep. 2019;804:1–56.
+23. Chen R, Zhang L, Zang D, Shen W. Blood drop patterns: formation and appli-
+cations. Adv Colloid Interface Sci. 2016;231:1–14.
+24. Pal A, Gope A, Sengupta A. Drying of bio-colloidal sessile droplets: advances, 
+applications, and perspectives. Adv Colloid Interface Sci. 2023;314:102870.
+25. Sefiane K, Duursma G, Arif A. Patterns from dried drops as a characterisation 
+and healthcare diagnosis technique, potential and challenges: a review. Adv 
+Colloid Interface Sci. 2021;298:102546.
+26. Vaez S, Dadfar B, Koenig M, Franzreb M, Lahann J. Deep learning-based clas-
+sification of histone-DNA interactions using drying droplet patterns. Small 
+Sci. 2024;4:2400252.
+27. Dadfar B, Vaez S, Haret C, Koenig M, Mohammadi Hafshejani T, Franzreb M, et 
+al. Deep-learning-assisted affinity classification for humoral immunoprotein 
+complexes. Small Struct. 2024;5:2400204.
+28. Jeihanipour A, Lahann J. Deep‐learning‐assisted stratification of amyloid beta 
+mutants using drying droplet patterns. Adv Mater. 2022;34:2110404.
+29. Thokchom AK, Swaminathan R, Singh A. Fluid flow and particle dynamics 
+inside an evaporating droplet containing live bacteria displaying chemotaxis. 
+Langmuir. 2014;30:12144–53.
+30. Majee S, Chowdhury AR, Pinto R, Chattopadhyay A, Agharkar AN, Chakra-
+vortty D, et al. Spatiotemporal evaporating droplet dynamics on fomites 
+enhances long term bacterial pathogenesis. Commun Biol. 2021;4:1173.
+31. Rasheed A, Hegde O, Chatterjee R, Sampathirao SR, Chakravortty D, Basu 
+S. Physics of self-assembly and morpho-topological changes of Klebsi-
+ella pneumoniae in desiccating sessile droplets. J Colloid Interface Sci. 
+2023;629:620–31.
+
+===== PAGE 16 =====
+Page 16 of 16
+Guan et al. Journal of Nanobiotechnology           (2026) 24:113 
+32. Sempels W, De Dier R, Mizuno H, Hofkens J, Vermant J. Auto-production of 
+biosurfactants reverses the coffee ring effect in a bacterial system. Nat Com-
+mun. 2013;4:1757.
+33. Ma X, Liu Z, Zeng W, Lin T, Tian X, Cheng X. Crack patterns of drying dense 
+bacterial suspensions. Soft Matter. 2022;18:5239–48.
+34. Han GR, Goncharov A, Eryilmaz M, Ye S, Palanisamy B, Ghosh R, et al. Machine 
+learning in point-of-care testing: innovations, challenges, and opportunities. 
+Nat Commun. 2025;16:3165.
+35. Riti J, Sutra G, Naas T, Volland H, Simon S, Perez-Toralla K. Combining deep 
+learning and droplet microfluidics for rapid and label-free antimicrobial 
+susceptibility testing of colistin. Biosens Bioelectron. 2024;257:116301.
+36. Moen E, Bannon D, Kudo T, Graf W, Covert M, Van Valen D. Deep learning for 
+cellular image analysis. Nat Methods. 2019;16:1233–46.
+37. Deegan RD, Bakajin O, Dupont TF, Huber G, Nagel SR, Witten TA. Capillary flow 
+as the cause of ring stains from dried liquid drops. Nature. 1997;389:827.
+38. Kasyap TV, Koch DL, Wu M. Bacterial collective motion near the contact line 
+of an evaporating sessile drop. Phys Fluids. 2014.  h t t p s :   /  / d o  i .  o r  g  /  1 0  . 1 1   2 8  /  a a c . 
+0 0  3 5 5 - 1 9.
+39. Chen G, Mohamed GJ. Complex protein patterns formation via salt-induced 
+self-assembly and droplet evaporation. Eur Phys J E. 2010;33:19–26.
+40. Lee J, Jha K, Harper CE, Zhang W, Ramsukh M, Bouklas N, et al. Determining 
+the Young ’s modulus of the bacterial cell envelope. ACS Biomater Sci Eng. 
+2024;10:2956–66.
+41. Vadillo-Rodriguez V, Pedraz P , Flors C. How much force is needed to kill a 
+single bacterium? Small. 2025;21:e2407990.
+42. Tadesse LF, Ho CS, Chen DH, Arami H, Banaei N, Gambhir SS, et al. Plasmonic 
+and electrostatic interactions enable uniformly enhanced liquid bacterial 
+surface-enhanced raman scattering (SERS). Nano Lett. 2020;20:7655–61.
+43. Osborn MJ. Structure and biosynthesis of the bacterial cell wall. Annu Rev 
+Biochem. 1969;38:501–38.
+44. Talo M, Yildirim O, Baloglu UB, Aydin G, Acharya UR. Convolutional neural 
+networks for multi-class brain disease detection using MRI images. Comput 
+Med Imaging Graph. 2019;78:101673.
+45. Dawood H, Nawaz M, Ilyas MU, Nazir T, Javed A. Attention-guided CenterNet 
+deep learning approach for lung cancer detection. Comput Biol Med. 
+2025;186:109613.
+46. Sauget M, Valot B, Bertrand X, Hocquet D. Can MALDI-TOF mass spectrometry 
+reasonably type bacteria? Trends Microbiol. 2017;25:447–55.
+47. Clark AE, Kaleta EJ, Arora A, Wolk DM. Matrix-assisted laser desorption 
+ionization-time of flight mass spectrometry: a fundamental shift in the 
+routine practice of clinical microbiology. Clin Microbiol Rev. 2013;26:547–603.
+48. Boolchandani M, D’Souza AW, Dantas G. Sequencing-based methods and 
+resources to study antimicrobial resistance. Nat Rev Genet. 2019;20:356–70.
+49. Lee S, Park JS, Hong JH, Woo H, Lee CH, Yoon JH, et al. Artificial intelligence 
+in bacterial diagnostics and antimicrobial susceptibility testing: current 
+advances and future prospects. Biosens Bioelectron. 2025;280:117399.
+50. Kim MJ, Park J, Kang M, Jeong U, Jeong D, Kang NG, et al. Bacteria detection 
+and species identification at the single-cell level using super-resolution 
+fluorescence imaging and AI analysis. Biosens Bioelectron. 2023;240:115603.
+51. Kim S, Lee MH, Wiwasuku T, Day AS, Youngme S, Hwang DS, et al. Human 
+sensor-inspired supervised machine learning of smartphone-based paper 
+microfluidic analysis for bacterial species classification. Biosens Bioelectron. 
+2021;188:113335.
+52. Ozel DB, Hadadi N, Babu AF, van der Meer JR. Rapid detection of microbiota 
+cell type diversity using machine-learned classification of flow cytometry 
+data. Commun Biol. 2020;3:379.
+53. Rho E, Kim M, Cho SH, Choi B, Park H, Jang H, et al. Separation-free bacterial 
+identification in arbitrary media via deep neural network-based SERS analysis. 
+Biosens Bioelectron. 2022;202:113991.
+54. Tseng YM, Chen KL, Chao PH, Han YY, Huang NT. Deep learning-assisted 
+surface-enhanced raman scattering for rapid bacterial identification. ACS 
+Appl Mater Interfaces. 2023;15:26398–406.
+55. Zou D, Deng K, Zeng Z, Gong W, Guo B, Liu Y, et al. A bioinspired lipopeptide 
+surmounts therapeutic dilemmas of Gram-positive and Gram-negative 
+polymicrobial infection. J Am Chem Soc. 2025;147:36339–51.
+56. Liu PY, Wu HC, Li YL, Cheng HW, Liou CH, Chen FJ, et al. Comprehensive 
+pathogen identification and antimicrobial resistance prediction from posi-
+tive blood cultures using nanopore sequencing technology. Genome Med. 
+2024;16:141.
+Publisher's Note
+Springer Nature remains neutral with regard to jurisdictional claims in 
+published maps and institutional affiliations.
+

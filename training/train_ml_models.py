@@ -8,9 +8,14 @@ train_ml_models.py — 一键训练所有 ML 模型（深度特征 + MLP）
   4. 模型保存到 collected_data/models/
 
 使用方法:
-  python train_ml_models.py
+  python training/train_ml_models.py
 """
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from afm_ml_recognition import (
     DeepFeatureExtractor,
@@ -18,8 +23,7 @@ from afm_ml_recognition import (
     train_deep_remount_predictor,
 )
 
-BASE_DIR = Path(__file__).resolve().parent
-SITE_MEMORY_ROOT = BASE_DIR / "collected_data" / "site_memories"
+SITE_MEMORY_ROOT = PROJECT_ROOT / "collected_data" / "site_memories"
 
 
 def main():
@@ -32,7 +36,7 @@ def main():
         print("  4. Repeat for a few different sites (optional)")
         return
 
-    models_dir = BASE_DIR / "collected_data" / "models"
+    models_dir = PROJECT_ROOT / "collected_data" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Training ML models from {SITE_MEMORY_ROOT}")

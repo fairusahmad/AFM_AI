@@ -2,6 +2,7 @@
 preprocess_data.py - Data preprocessing for AI training
 """
 
+import sys
 from pathlib import Path
 
 import joblib
@@ -11,9 +12,13 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 FORWARD_FEATURES = ["cmd_x", "cmd_prev_1", "cmd_prev_2", "direction", "velocity"]
 INVERSE_FEATURES = ["actual_x", "actual_prev_1", "actual_prev_2", "direction_actual", "velocity_actual"]
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = PROJECT_ROOT
 
 
 def resolve_project_path(path_str):

@@ -525,6 +525,9 @@ relocation_tooltips = {
     "research_patterns": "Verify Tip: re-match multiple remembered landmark patterns around the tip to confirm whether the cantilever is at the correct place.",
     "ai_recall": "AI Recall: one-click AI relocation \u2014 load site memory, recognize pattern with rotation, move cantilever, verify. Click to correct if needed.",
     "ai_zoom": "AI Zoom: recall saved zoom level, AI-recognize pattern, auto zoom-out search if not found, then move + verify.",
+    "smooth_slower": "Slower: reduce the smooth animated cantilever movement speed so relocation motion is easier to inspect.",
+    "smooth_faster": "Faster: increase the smooth animated cantilever movement speed for quicker relocation travel.",
+    "relocation_go_now": "Go Now: immediately jump to the pending AI relocation target, or to the current motion destination if no relocation target is pending.",
 }
 
 
@@ -1491,6 +1494,9 @@ bind_logged_button("ml_origin", "Find Saved Origin", callbacks.ml_find_origin)
 bind_logged_button("relocate", "Recover Site", callbacks.relocate)
 bind_logged_button("ai_recall", "AI Recall & Recover", callbacks.ai_recall_and_recover)
 bind_logged_button("ai_zoom", "AI Zoom & Recover", callbacks.ai_zoom_recover)
+bind_logged_button("smooth_slower", "Smooth Move Slower", callbacks.slow_smooth_move)
+bind_logged_button("smooth_faster", "Smooth Move Faster", callbacks.fast_smooth_move)
+bind_logged_button("relocation_go_now", "Relocation Go Now", callbacks.go_now_relocation)
 
 bind_logged_button("zoom_in", "Zoom In", callbacks.zoom_in)
 bind_logged_button("zoom_out", "Zoom Out", callbacks.zoom_out)

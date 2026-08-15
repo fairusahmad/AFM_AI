@@ -179,6 +179,8 @@ class AFMState:
         self.smooth_move_target_x = None
         self.smooth_move_target_y = None
         self.smooth_move_step = 20.0
+        self.smooth_move_min_step = 1.0
+        self.smooth_move_max_step = 160.0
 
     def get_optical_zoom_ratio(self):
         return float(np.clip(self.current_zoom_level, self.min_zoom_level, self.max_zoom_level))
