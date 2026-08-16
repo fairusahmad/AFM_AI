@@ -27,6 +27,7 @@ from afm_relocation import (
     analyze_landmark_geometry,
     apply_affine,
     build_overview,
+    build_overview_from_view,
     build_site_memory,
     estimate_landmark_consensus,
     expanded_rotation_affine,
@@ -691,6 +692,7 @@ class AFMCallbacks:
         self.state.current_fov_raw = fov.copy()
         self.state.current_camera_view, _ = render_camera_recognition_frame(
             fov,
+            camera_resolution=self.state.camera_reference_resolution,
             outside_mask=outside_mask,
             focus_model=self.state.get_focus_model(),
             fov_width_um=self.state.fov_width,
@@ -718,6 +720,97 @@ class AFMCallbacks:
         self.ax.set_ylim(iy + self.state.fov_height, iy)
         self.update_probe_visuals()
         self.fig.canvas.draw_idle()
+
+    def _capture_recognition_view(
+        self,
+        top_left_x_um,
+        top_left_y_um,
+        fov_width_um,
+        fov_height_um,
+        *,
+        zoom_level=None,
+        camera_resolution=None,
+    ):
+        fov, outside_mask, _, _ = create_stage_fov(
+            self.state.surface_image,
+            self.artifact_layer,
+            self.state.show_artifact,
+            top_left_x_um,
+            top_left_y_um,
+            fov_width_um,
+            fov_height_um,
+            valid_mask=self.state.surface_valid_mask,
+        )
+        return render_camera_recognition_frame(
+            fov,
+            camera_resolution=(
+                self.state.camera_reference_resolution
+                if camera_resolution is None
+                else camera_resolution
+            ),
+            outside_mask=outside_mask,
+            focus_model=self.state.get_focus_model(
+                zoom_level=zoom_level,
+                fov_width_um=fov_width_um,
+                fov_height_um=fov_height_um,
+            ),
+            fov_width_um=fov_width_um,
+            fov_height_um=fov_height_um,
+            tip_rel_x=self.PROBE_TIP_REL_X,
+            tip_rel_y=self.PROBE_TIP_REL_Y,
+            body_width_um=self.state.probe_body_width_um,
+            tip_width_um=self.state.probe_tip_width_um,
+            tip_total_length_um=self.state.probe_tip_total_length_um,
+            triangular_tip_length_um=self.state.probe_triangular_tip_length_um,
+            visible_body_depth_um=self.state.probe_visible_body_depth_um,
+        )[0]
+
+    def _build_camera_overview(
+        self,
+        *,
+        zoom_level,
+        center_x_um,
+        center_y_um,
+        camera_resolution=None,
+        max_dim=512,
+    ):
+        fov_width_um, fov_height_um = self.state.get_fov_for_zoom_level(zoom_level)
+        max_x = max(float(self.state.width_um) - float(fov_width_um), 0.0)
+        max_y = max(float(self.state.height_um) - float(fov_height_um), 0.0)
+        top_left_x_um = float(np.clip(center_x_um - float(fov_width_um) * 0.5, 0.0, max_x))
+        top_left_y_um = float(np.clip(center_y_um - float(fov_height_um) * 0.5, 0.0, max_y))
+        view = self._capture_recognition_view(
+            top_left_x_um,
+            top_left_y_um,
+            fov_width_um,
+            fov_height_um,
+            zoom_level=zoom_level,
+            camera_resolution=(
+                self.state.camera_resolution
+                if camera_resolution is None
+                else camera_resolution
+            ),
+        )
+        if view is None or view.size == 0:
+            return None
+        scale_x_um_per_px = float(fov_width_um) / float(max(view.shape[1], 1))
+        scale_y_um_per_px = float(fov_height_um) / float(max(view.shape[0], 1))
+        overview = build_overview_from_view(
+            view,
+            scale_x_um_per_px=scale_x_um_per_px,
+            scale_y_um_per_px=scale_y_um_per_px,
+            max_dim=max_dim,
+        )
+        if overview is None:
+            return None
+        overview["top_left_x_um"] = top_left_x_um
+        overview["top_left_y_um"] = top_left_y_um
+        overview["center_x_um"] = float(top_left_x_um + float(fov_width_um) * 0.5)
+        overview["center_y_um"] = float(top_left_y_um + float(fov_height_um) * 0.5)
+        overview["fov_width_um"] = float(fov_width_um)
+        overview["fov_height_um"] = float(fov_height_um)
+        overview["zoom_level"] = float(zoom_level)
+        return overview
 
     def _clamp_to_stage_margin(self, x, y):
         min_x = -self.state.stage_margin_um
@@ -1038,23 +1131,32 @@ class AFMCallbacks:
 
     def _estimate_coarse_affine_transform(self):
         site_memory = self.state.site_memory or {}
-        ref_tpl = self.state.ref_template
+        reference_overview = site_memory.get("overview") or {}
+        ref_tpl = reference_overview.get("image")
         if ref_tpl is None:
-            self.log("No ref_template available")
+            self.log("No saved low-mag camera overview available")
             return None
 
         ref_tl = site_memory.get("reference_top_left") or {}
         ref_x = float(ref_tl.get("x_um", self.state.ref_x))
         ref_y = float(ref_tl.get("y_um", self.state.ref_y))
-        search_half = max(self.state.relocation_fine_half_range_um * 6, 4000)
+        coarse_zoom = float(reference_overview.get("zoom_level", site_memory.get("coarse_zoom_level", min(self.state.zoom_levels))))
+        current_overview = self._build_camera_overview(
+            zoom_level=coarse_zoom,
+            center_x_um=float(self.state.probe_tip_x),
+            center_y_um=float(self.state.probe_tip_y),
+        )
+        if current_overview is None or current_overview.get("image") is None:
+            self.log("Current low-mag camera overview could not be generated")
+            return None
+        search_image = current_overview["image"]
         tpl_h, tpl_w = ref_tpl.shape[:2]
 
         # -- ML 预估旋转, 缩小 NCC 搜索范围 --
         ml_angle = None
         if self.deep_regressor is not None:
             try:
-                crop = self.state.surface_image[int(ref_y):int(ref_y)+tpl_h,
-                                                int(ref_x):int(ref_x)+tpl_w]
+                crop = search_image[:tpl_h, :tpl_w]
                 if crop.shape == ref_tpl.shape:
                     result = self.deep_regressor.predict(ref_tpl, crop)
                     if result is not None:
@@ -1082,18 +1184,30 @@ class AFMCallbacks:
                 tpl = cv2.warpAffine(ref_tpl, rm, (tpl_w, tpl_h), borderMode=cv2.BORDER_REPLICATE)
             else:
                 tpl = ref_tpl
-            match = match_reference_template(self.state.surface_image, tpl, ref_x, ref_y, half_range=search_half)
+            candidates = match_template_candidates(search_image, tpl, top_k=2)
+            match = None
+            if candidates:
+                best = candidates[0]
+                score_gap = float(best["score"] - candidates[1]["score"]) if len(candidates) > 1 else float(best["score"])
+                match = {
+                    "x": int(best["x"]),
+                    "y": int(best["y"]),
+                    "score": float(best["score"]),
+                    "score_gap": score_gap,
+                }
             if match is not None and (ncc_match is None or match["score"] > ncc_match["score"]):
                 ncc_match = match
                 best_angle = try_angle
                 self.log(f"[NCC] angle={try_angle:+.1f} deg score={match['score']:.3f} at ({match['x']:.0f},{match['y']:.0f})")
 
         if ncc_match is None:
-            self.log("[NCC] no match found on surface")
+            self.log("[NCC] no match found in current low-mag camera POV")
             return None
 
-        dx_ncc = ncc_match["x"] - ref_x
-        dy_ncc = ncc_match["y"] - ref_y
+        matched_top_left_x = float(current_overview["top_left_x_um"] + ncc_match["x"] * current_overview["scale_x_um_per_px"])
+        matched_top_left_y = float(current_overview["top_left_y_um"] + ncc_match["y"] * current_overview["scale_y_um_per_px"])
+        dx_ncc = matched_top_left_x - ref_x
+        dy_ncc = matched_top_left_y - ref_y
         final_angle = best_angle
         self.log(f"[NCC] result: dX={dx_ncc:+.0f} dY={dy_ncc:+.0f} um angle={final_angle:+.2f} deg score={ncc_match['score']:.3f}")
 
@@ -1102,12 +1216,12 @@ class AFMCallbacks:
         if self.deep_regressor is not None:
             try:
                 mx2, my2 = int(round(ncc_match["x"])), int(round(ncc_match["y"]))
-                sh2, sw2 = self.state.surface_image.shape[:2]
+                sh2, sw2 = search_image.shape[:2]
                 cx2, cy2 = min(sw2, mx2 + tpl_w), min(sh2, my2 + tpl_h)
                 if cx2 - mx2 >= tpl_w // 2 and cy2 - my2 >= tpl_h // 2:
-                    vc = self.state.surface_image[my2:cy2, mx2:cx2]
+                    vc = search_image[my2:cy2, mx2:cx2]
                     if vc.shape[0] != tpl_h or vc.shape[1] != tpl_w:
-                        fv = int(np.median(self.state.surface_image))
+                        fv = int(np.median(search_image))
                         vc = cv2.copyMakeBorder(vc, 0, tpl_h - vc.shape[0], 0, tpl_w - vc.shape[1],
                                                 borderType=cv2.BORDER_CONSTANT, value=fv)
                     mr = self.deep_regressor.predict(ref_tpl, vc)
@@ -1124,12 +1238,6 @@ class AFMCallbacks:
                   "translation_px": (dx_ncc, dy_ncc), "match_count": 1, "inlier_count": 1,
                   "confidence": float(ncc_match["score"])}
 
-        reference_overview = site_memory.get("overview")
-        current_overview = build_overview(self.state.surface_image)
-        if current_overview is None:
-            current_overview = {}
-        if reference_overview is None:
-            reference_overview = {}
         report = dict(affine)
         report["current_overview"] = current_overview
         report["full_matrix"] = full_matrix
@@ -1742,7 +1850,17 @@ class AFMCallbacks:
             self.state.ref_y = self.state.y
             self.state.ai_desired_history_x = [self.state.x, self.state.x]
             self.state.ai_desired_history_y = [self.state.y, self.state.y]
-            self.state.site_memory = build_site_memory(self.state, stage_history=self.stage.history_cmd)
+            coarse_zoom_level = float(min(self.state.zoom_levels))
+            overview = self._build_camera_overview(
+                zoom_level=coarse_zoom_level,
+                center_x_um=float(self.state.probe_tip_x),
+                center_y_um=float(self.state.probe_tip_y),
+            )
+            self.state.site_memory = build_site_memory(
+                self.state,
+                stage_history=self.stage.history_cmd,
+                overview=overview,
+            )
             self.state.ref_artefacts = list(self.state.site_memory.get("highmag_landmarks", []))
             output_dir = self._persist_site_memory(self.state.site_memory)
             self.log(f"Reference position saved: ({self.state.ref_x:.1f}, {self.state.ref_y:.1f})")
@@ -1752,6 +1870,12 @@ class AFMCallbacks:
                 f"{len(self.state.site_memory.get('lowmag_landmarks', []))} low-mag landmarks and "
                 f"{len(self.state.site_memory.get('highmag_landmarks', []))} high-mag landmarks"
             )
+            if overview is not None:
+                self.log(
+                    "Saved low-mag reference from camera POV: "
+                    f"{overview['image'].shape[1]} x {overview['image'].shape[0]} px at "
+                    f"{overview['zoom_level']:.2f}x"
+                )
             self.log(f"Site memory folder: {output_dir}")
         finally:
             self._end_action("save_reference")
@@ -1956,11 +2080,18 @@ class AFMCallbacks:
                 )
 
             if fine_to_current_matrix is None and site_memory.get("lowmag_landmarks"):
-                overview = build_overview(self.state.surface_image)
+                coarse_zoom = float((site_memory.get("overview") or {}).get("zoom_level", site_memory.get("coarse_zoom_level", min(self.state.zoom_levels))))
+                overview = self._build_camera_overview(
+                    zoom_level=coarse_zoom,
+                    center_x_um=float(self.state.probe_tip_x),
+                    center_y_um=float(self.state.probe_tip_y),
+                )
                 if overview is not None:
                     coarse_result = estimate_landmark_consensus(
                         site_memory.get("lowmag_landmarks", []),
                         overview["image"],
+                        search_origin_x_um=float(overview.get("top_left_x_um", 0.0)),
+                        search_origin_y_um=float(overview.get("top_left_y_um", 0.0)),
                         scale_x_um_per_px=overview["scale_x_um_per_px"],
                         scale_y_um_per_px=overview["scale_y_um_per_px"],
                         min_score=self.state.relocation_min_match_score,
@@ -2319,11 +2450,17 @@ class AFMCallbacks:
                 )
 
             if fine_to_current_matrix is None and site_memory.get("lowmag_landmarks"):
-                overview = build_overview(self.state.surface_image)
+                overview = self._build_camera_overview(
+                    zoom_level=coarse_zoom,
+                    center_x_um=float(self.state.probe_tip_x),
+                    center_y_um=float(self.state.probe_tip_y),
+                )
                 if overview is not None:
                     coarse_result = estimate_landmark_consensus(
                         site_memory.get("lowmag_landmarks", []),
                         overview["image"],
+                        search_origin_x_um=float(overview.get("top_left_x_um", 0.0)),
+                        search_origin_y_um=float(overview.get("top_left_y_um", 0.0)),
                         scale_x_um_per_px=overview["scale_x_um_per_px"],
                         scale_y_um_per_px=overview["scale_y_um_per_px"],
                         min_score=max(0.30, float(self.state.relocation_min_match_score) - 0.12),
@@ -2338,7 +2475,11 @@ class AFMCallbacks:
 
             ml_remount = None
             if fine_to_current_matrix is None and coarse_result is None:
-                cur_overview = build_overview(self.state.surface_image)
+                cur_overview = self._build_camera_overview(
+                    zoom_level=coarse_zoom,
+                    center_x_um=float(self.state.probe_tip_x),
+                    center_y_um=float(self.state.probe_tip_y),
+                )
                 if cur_overview is not None and site_memory.get("overview", {}).get("image") is not None:
                     ml_remount = self._ml_predict_remount(
                         site_memory.get("overview", {}).get("image"),
@@ -2382,7 +2523,11 @@ class AFMCallbacks:
                 half_range_um=self.state.relocation_fine_half_range_um * 2,
             )
             if ml_remount is None:
-                cur_overview = build_overview(self.state.surface_image)
+                cur_overview = self._build_camera_overview(
+                    zoom_level=coarse_zoom,
+                    center_x_um=float(self.state.probe_tip_x),
+                    center_y_um=float(self.state.probe_tip_y),
+                )
                 if cur_overview is not None and site_memory.get("overview", {}).get("image") is not None:
                     ml_remount = self._ml_predict_remount(
                         site_memory.get("overview", {}).get("image"),

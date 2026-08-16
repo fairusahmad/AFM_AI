@@ -106,6 +106,7 @@ class AFMAnimation:
         self.state.current_fov_raw = fov.copy()
         self.state.current_camera_view, _ = render_camera_recognition_frame(
             fov,
+            camera_resolution=self.state.camera_reference_resolution,
             outside_mask=outside_mask,
             focus_model=self.state.get_focus_model(),
             fov_width_um=self.state.fov_width,
@@ -191,6 +192,7 @@ class AFMAnimation:
         self.state.current_fov_raw = fov.copy()
         self.state.current_camera_view, _ = render_camera_recognition_frame(
             fov,
+            camera_resolution=self.state.camera_reference_resolution,
             outside_mask=outside_mask,
             focus_model=self.state.get_focus_model(
                 zoom_level=interpolated_zoom,

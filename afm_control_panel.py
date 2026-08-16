@@ -348,6 +348,7 @@ initial_fov, initial_outside_mask, initial_ix, initial_iy = create_stage_fov(
 state.current_fov_raw = initial_fov.copy()
 state.current_camera_view, _ = render_camera_recognition_frame(
     initial_fov,
+    camera_resolution=state.camera_reference_resolution,
     outside_mask=initial_outside_mask,
     focus_model=state.get_focus_model(),
     fov_width_um=state.fov_width,

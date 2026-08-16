@@ -50,6 +50,36 @@ def build_overview(surface_image, max_dim=512):
     }
 
 
+def build_overview_from_view(
+    image,
+    *,
+    scale_x_um_per_px=1.0,
+    scale_y_um_per_px=1.0,
+    max_dim=512,
+):
+    gray = to_grayscale_u8(image)
+    if gray is None or gray.size == 0:
+        return None
+
+    src_h, src_w = gray.shape[:2]
+    if max(src_h, src_w) <= max_dim:
+        resized = gray.copy()
+    else:
+        scale = float(max_dim) / float(max(src_h, src_w))
+        resized = cv2.resize(
+            gray,
+            (max(1, int(round(src_w * scale))), max(1, int(round(src_h * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    out_h, out_w = resized.shape[:2]
+    return {
+        "image": resized,
+        "scale_x_um_per_px": float(scale_x_um_per_px) * float(src_w) / float(max(out_w, 1)),
+        "scale_y_um_per_px": float(scale_y_um_per_px) * float(src_h) / float(max(out_h, 1)),
+    }
+
+
 def _patch_score(patch):
     patch_f = patch.astype(np.float32)
     gy, gx = np.gradient(patch_f)
@@ -633,8 +663,8 @@ def overview_affine_to_fullres(matrix, reference_overview, current_overview):
     return homogeneous_to_affine(full)
 
 
-def build_site_memory(state, stage_history=None):
-    overview = build_overview(state.surface_image)
+def build_site_memory(state, stage_history=None, overview=None):
+    overview = build_overview(state.surface_image) if overview is None else dict(overview)
     origin_x = float(state.origin_x) if getattr(state, "origin_defined", False) else None
     origin_y = float(state.origin_y) if getattr(state, "origin_defined", False) else None
     sample_id = sanitize_token(Path(state.sample_path).stem if state.sample_path else state.sample_source, "sample")
