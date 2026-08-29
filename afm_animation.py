@@ -1,5 +1,5 @@
 import numpy as np
-from afm_utils import create_stage_fov, get_scale_bar_geometry, render_camera_frame, render_camera_recognition_frame, update_title
+from afm_utils import create_stage_fov, get_scale_bar_geometry, render_camera_frame, render_camera_matching_frame, render_camera_recognition_frame, update_title
 
 class AFMAnimation:
     def __init__(self, state, stage, data, ax, img, ideal_line, hyst_line,
@@ -106,7 +106,20 @@ class AFMAnimation:
         self.state.current_fov_raw = fov.copy()
         self.state.current_camera_view, _ = render_camera_recognition_frame(
             fov,
-            camera_resolution=self.state.camera_reference_resolution,
+            camera_resolution=self.state.camera_resolution,
+            outside_mask=outside_mask,
+            focus_model=self.state.get_focus_model(),
+            fov_width_um=self.state.fov_width,
+            fov_height_um=self.state.fov_height,
+            body_width_um=self.state.probe_body_width_um,
+            tip_width_um=self.state.probe_tip_width_um,
+            tip_total_length_um=self.state.probe_tip_total_length_um,
+            triangular_tip_length_um=self.state.probe_triangular_tip_length_um,
+            visible_body_depth_um=self.state.probe_visible_body_depth_um,
+        )
+        self.state.current_matching_view, _ = render_camera_matching_frame(
+            fov,
+            camera_resolution=(512, 384),
             outside_mask=outside_mask,
             focus_model=self.state.get_focus_model(),
             fov_width_um=self.state.fov_width,
@@ -192,7 +205,24 @@ class AFMAnimation:
         self.state.current_fov_raw = fov.copy()
         self.state.current_camera_view, _ = render_camera_recognition_frame(
             fov,
-            camera_resolution=self.state.camera_reference_resolution,
+            camera_resolution=self.state.camera_resolution,
+            outside_mask=outside_mask,
+            focus_model=self.state.get_focus_model(
+                zoom_level=interpolated_zoom,
+                fov_width_um=new_width,
+                fov_height_um=new_height,
+            ),
+            fov_width_um=new_width,
+            fov_height_um=new_height,
+            body_width_um=self.state.probe_body_width_um,
+            tip_width_um=self.state.probe_tip_width_um,
+            tip_total_length_um=self.state.probe_tip_total_length_um,
+            triangular_tip_length_um=self.state.probe_triangular_tip_length_um,
+            visible_body_depth_um=self.state.probe_visible_body_depth_um,
+        )
+        self.state.current_matching_view, _ = render_camera_matching_frame(
+            fov,
+            camera_resolution=(512, 384),
             outside_mask=outside_mask,
             focus_model=self.state.get_focus_model(
                 zoom_level=interpolated_zoom,

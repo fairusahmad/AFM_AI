@@ -179,6 +179,25 @@ def apply_probe_occlusion(frame, occlusion_mask, fill_value=None):
     return occluded
 
 
+def apply_probe_silhouette(frame, occlusion_mask, body_fill_value=None):
+    if frame is None:
+        return None
+    silhouetted = np.array(frame, copy=True)
+    if occlusion_mask is None or not np.any(occlusion_mask):
+        return silhouetted
+    if body_fill_value is None:
+        median_value = int(np.median(silhouetted)) if silhouetted.size else 0
+        body_fill_value = int(np.clip(median_value * 0.25, 0, 255))
+    if silhouetted.ndim == 2:
+        silhouetted[occlusion_mask] = body_fill_value
+    else:
+        fill = np.array(body_fill_value, dtype=silhouetted.dtype)
+        if fill.ndim == 0:
+            fill = np.repeat(fill[None], silhouetted.shape[-1])
+        silhouetted[occlusion_mask] = fill
+    return silhouetted
+
+
 def render_camera_frame(fov, camera_resolution=None, outside_mask=None, outside_color=(155, 24, 24), focus_model=None):
     if fov.size == 0:
         return fov, get_defocus_metrics(focus_model, fov.shape)
@@ -221,13 +240,156 @@ def render_camera_recognition_frame(
         triangular_tip_length_um=triangular_tip_length_um,
         visible_body_depth_um=visible_body_depth_um,
     )
-    combined_mask = occlusion_mask if outside_mask is None else np.logical_or(outside_mask, occlusion_mask)
+    median_fill = int(np.median(blurred)) if blurred.size else 0
+    probe_fill = int(np.clip(median_fill * 0.25, 0, 255))
+    blurred = apply_probe_silhouette(blurred, occlusion_mask, body_fill_value=probe_fill)
+    if outside_mask is not None and np.any(outside_mask):
+        blurred = np.array(blurred, copy=True)
+        blurred[outside_mask] = median_fill
+    return blurred, focus_metrics
+
+
+def render_camera_matching_frame(
+    fov,
+    *,
+    camera_resolution=None,
+    outside_mask=None,
+    focus_model=None,
+    fov_width_um,
+    fov_height_um,
+    tip_rel_x=0.50,
+    tip_rel_y=0.50,
+    body_width_um=1600.0,
+    tip_width_um=35.0,
+    tip_total_length_um=125.0,
+    triangular_tip_length_um=15.0,
+    visible_body_depth_um=3400.0,
+):
+    if fov.size == 0:
+        return fov, get_defocus_metrics(focus_model, fov.shape)
+    fov, outside_mask = _resize_fov_and_mask(fov, camera_resolution=camera_resolution, outside_mask=outside_mask)
+    blurred, focus_metrics = apply_defocus_blur(fov, focus_model)
+    occlusion_mask = create_probe_occlusion_mask(
+        blurred.shape,
+        fov_width_um=fov_width_um,
+        fov_height_um=fov_height_um,
+        tip_rel_x=tip_rel_x,
+        tip_rel_y=tip_rel_y,
+        body_width_um=body_width_um,
+        tip_width_um=tip_width_um,
+        tip_total_length_um=tip_total_length_um,
+        triangular_tip_length_um=triangular_tip_length_um,
+        visible_body_depth_um=visible_body_depth_um,
+    )
     median_fill = int(np.median(blurred)) if blurred.size else 0
     blurred = apply_probe_occlusion(blurred, occlusion_mask, fill_value=median_fill)
-    if combined_mask is not None and np.any(combined_mask):
+    if outside_mask is not None and np.any(outside_mask):
         blurred = np.array(blurred, copy=True)
-        blurred[combined_mask] = median_fill
+        blurred[outside_mask] = median_fill
     return blurred, focus_metrics
+
+
+def render_camera_archival_frame(
+    fov,
+    *,
+    camera_resolution=None,
+    outside_mask=None,
+    focus_model=None,
+    fov_width_um,
+    fov_height_um,
+    scale_bar_total_um=200.0,
+    tip_rel_x=0.50,
+    tip_rel_y=0.50,
+    body_width_um=1600.0,
+    tip_width_um=35.0,
+    triangular_tip_length_um=15.0,
+    visible_body_depth_um=3400.0,
+):
+    if fov.size == 0:
+        return fov, get_defocus_metrics(focus_model, fov.shape)
+
+    fov, outside_mask = _resize_fov_and_mask(fov, camera_resolution=camera_resolution, outside_mask=outside_mask)
+    blurred, focus_metrics = apply_defocus_blur(fov, focus_model)
+    gray = np.array(blurred, copy=True)
+    if outside_mask is not None and np.any(outside_mask):
+        median_fill = int(np.median(gray)) if gray.size else 180
+        gray[outside_mask] = median_fill
+
+    height, width = gray.shape[:2]
+    frame = np.repeat(gray[..., None], 3, axis=2)
+    background_fill = int(np.clip(np.median(gray) if gray.size else 180, 120, 230))
+    cantilever_fill = int(np.clip(background_fill + 5, 0, 255))
+    outline_color = (16, 16, 16)
+
+    px_per_um_x = float(width) / float(max(fov_width_um, 1e-6))
+    px_per_um_y = float(height) / float(max(fov_height_um, 1e-6))
+    tip_x = int(round(float(tip_rel_x) * float(width)))
+    tip_y = int(round(float(tip_rel_y) * float(height)))
+
+    tip_half_width_px = max(1, int(round(float(tip_width_um) * px_per_um_x / 2.0)))
+    tip_half_width_px = min(tip_half_width_px, max(3, int(round(width * 0.020))))
+    body_half_width_px = max(tip_half_width_px + 4, int(round(float(body_width_um) * px_per_um_x * 0.08 / 2.0)))
+    body_half_width_px = min(body_half_width_px, max(tip_half_width_px + 4, int(round(width * 0.028))))
+    tri_len_px = max(10, int(round(float(triangular_tip_length_um) * px_per_um_y * 1.8)))
+    body_depth_px = max(1, int(round(float(visible_body_depth_um) * px_per_um_y)))
+    tri_base_y = int(np.clip(tip_y + tri_len_px, 0, max(height - 1, 0)))
+    body_bottom_y = int(np.clip(tri_base_y + body_depth_px, tri_base_y, max(height - 1, 0)))
+
+    frame[tri_base_y:, :] = background_fill
+
+    polygon = np.array(
+        [
+            [max(0, tip_x - body_half_width_px), height - 1],
+            [max(0, tip_x - body_half_width_px), tri_base_y],
+            [max(0, tip_x - tip_half_width_px), tri_base_y],
+            [tip_x, tip_y],
+            [min(width - 1, tip_x + tip_half_width_px), tri_base_y],
+            [min(width - 1, tip_x + body_half_width_px), tri_base_y],
+            [min(width - 1, tip_x + body_half_width_px), height - 1],
+        ],
+        dtype=np.int32,
+    )
+    cv2.fillConvexPoly(frame, polygon, (cantilever_fill, cantilever_fill, cantilever_fill))
+    cv2.polylines(frame, [polygon], isClosed=True, color=outline_color, thickness=2, lineType=cv2.LINE_AA)
+    cv2.line(frame, (0, tri_base_y), (width - 1, tri_base_y), outline_color, 2, cv2.LINE_AA)
+    cv2.line(frame, (tip_x, tri_base_y), (tip_x, body_bottom_y), outline_color, 1, cv2.LINE_AA)
+
+    arrow_specs = [
+        ("^", (int(width * 0.50), int(height * 0.05))),
+        ("v", (int(width * 0.50), int(height * 0.97))),
+        ("<", (int(width * 0.03), int(height * 0.50))),
+        (">", (int(width * 0.95), int(height * 0.50))),
+    ]
+    for glyph, origin in arrow_specs:
+        cv2.putText(
+            frame,
+            glyph,
+            origin,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+    scale_bar_px = max(20, int(round(float(scale_bar_total_um) * px_per_um_x)))
+    bar_height_px = max(6, int(round(height * 0.018)))
+    margin_x = int(round(width * 0.06))
+    margin_y = int(round(height * 0.08))
+    x_end = max(width - margin_x, 1)
+    x_start = max(x_end - scale_bar_px, 0)
+    y_bar = max(height - margin_y, 1)
+    mid_x = x_start + (x_end - x_start) // 2
+    cv2.rectangle(frame, (x_start, y_bar - bar_height_px), (mid_x, y_bar), (0, 0, 0), thickness=-1)
+    cv2.rectangle(frame, (mid_x, y_bar - bar_height_px), (x_end, y_bar), (255, 255, 255), thickness=-1)
+    label = f"{int(round(scale_bar_total_um))} um"
+    label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+    label_x = max(x_end - label_size[0], 0)
+    label_y = max(y_bar - bar_height_px - 10, label_size[1] + 2)
+    cv2.putText(frame, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.putText(frame, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (110, 110, 110), 1, cv2.LINE_AA)
+
+    return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), focus_metrics
 
 
 def rotate_camera_frame(frame, angle_deg, fill_color=(155, 24, 24)):

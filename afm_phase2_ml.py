@@ -145,6 +145,18 @@ def _load_site_memories(site_memory_root):
     return site_memories
 
 
+def preferred_training_view(memory, *, strict_camera_only=False):
+    live_camera_view = memory.get("live_camera_view")
+    if live_camera_view is not None:
+        return live_camera_view, "live_camera_view"
+    if strict_camera_only:
+        return None, None
+    reference_template = memory.get("reference_template")
+    if reference_template is not None:
+        return reference_template, "reference_template_legacy"
+    return None, None
+
+
 def _synthetic_positive_variants(image, count=8):
     gray = to_grayscale_u8(image)
     if gray is None:
@@ -227,7 +239,7 @@ def build_same_site_dataset(site_memory_root, positive_augmentations=8, max_nega
     labels = []
     templates = []
     for site_dir, memory in site_memories:
-        template = memory.get("reference_template")
+        template, _ = preferred_training_view(memory)
         if template is None:
             continue
         variants = _synthetic_positive_variants(template, count=positive_augmentations)
@@ -255,7 +267,9 @@ def build_same_site_dataset(site_memory_root, positive_augmentations=8, max_nega
                 break
     else:
         _, memory = site_memories[0]
-        template = memory.get("reference_template")
+        template, _ = preferred_training_view(memory)
+        if template is None:
+            raise ValueError("No valid saved camera view available for same-site dataset generation.")
         hard_negatives = []
         origin_template = memory.get("origin_template")
         if origin_template is not None:

@@ -1,6 +1,7 @@
 import json
 import time
 from pathlib import Path
+from pathlib import PurePosixPath
 
 import cv2
 import numpy as np
@@ -195,6 +196,44 @@ def annotate_landmarks_with_tip_geometry(landmarks, tip_x_um=None, tip_y_um=None
     return landmarks
 
 
+def merge_landmark_sets(landmark_sets, *, max_landmarks=12, min_distance_um=120.0):
+    candidates = []
+    for set_index, landmarks in enumerate(landmark_sets or []):
+        for landmark in landmarks or []:
+            item = dict(landmark)
+            item["source_set_index"] = int(set_index)
+            candidates.append(item)
+    if not candidates:
+        return []
+
+    candidates.sort(
+        key=lambda item: (
+            1 if item.get("manual", False) else 0,
+            float(item.get("score", 0.0)),
+        ),
+        reverse=True,
+    )
+    selected = []
+    for candidate in candidates:
+        keep_candidate = True
+        for existing in selected:
+            threshold_um = float(min_distance_um)
+            if candidate.get("manual", False) or existing.get("manual", False):
+                threshold_um = min(threshold_um, 40.0)
+            if np.hypot(
+                float(candidate["abs_x_um"]) - float(existing["abs_x_um"]),
+                float(candidate["abs_y_um"]) - float(existing["abs_y_um"]),
+            ) < threshold_um:
+                keep_candidate = False
+                break
+        if not keep_candidate:
+            continue
+        selected.append(candidate)
+        if len(selected) >= max(int(max_landmarks), 1):
+            break
+    return selected
+
+
 def match_template_candidates(search_image, template, top_k=3, suppress_radius_px=None):
     search = to_grayscale_u8(search_image)
     patch = to_grayscale_u8(template)
@@ -233,7 +272,7 @@ def estimate_landmark_consensus(
     max_residual_um=75.0,
 ):
     matches = []
-    for landmark in reference_landmarks or []:
+    for index, landmark in enumerate(reference_landmarks or [], start=1):
         patch = landmark.get("patch")
         if patch is None:
             continue
@@ -250,25 +289,72 @@ def estimate_landmark_consensus(
             continue
         matches.append(
             {
+                "index": index,
                 "score": float(best["score"]),
                 "score_gap": score_gap,
+                "top_left_x_um": float(search_origin_x_um + best["x"] * scale_x_um_per_px),
+                "top_left_y_um": float(search_origin_y_um + best["y"] * scale_y_um_per_px),
                 "abs_x_um": center_x_um,
                 "abs_y_um": center_y_um,
+                "width_um": float(patch_w * scale_x_um_per_px),
+                "height_um": float(patch_h * scale_y_um_per_px),
                 "offset_x_um": float(center_x_um - landmark["abs_x_um"]),
                 "offset_y_um": float(center_y_um - landmark["abs_y_um"]),
                 "reference_abs_x_um": float(landmark["abs_x_um"]),
                 "reference_abs_y_um": float(landmark["abs_y_um"]),
+                "reference_tip_dx_um": (
+                    None if landmark.get("tip_dx_um") is None else float(landmark["tip_dx_um"])
+                ),
+                "reference_tip_dy_um": (
+                    None if landmark.get("tip_dy_um") is None else float(landmark["tip_dy_um"])
+                ),
+                "reference_tip_distance_um": (
+                    None if landmark.get("tip_distance_um") is None else float(landmark["tip_distance_um"])
+                ),
+                "reference_tip_angle_deg": (
+                    None if landmark.get("tip_angle_deg") is None else float(landmark["tip_angle_deg"])
+                ),
+                "guided_tip_x_um": (
+                    None
+                    if landmark.get("tip_dx_um") is None
+                    else float(center_x_um - float(landmark["tip_dx_um"]))
+                ),
+                "guided_tip_y_um": (
+                    None
+                    if landmark.get("tip_dy_um") is None
+                    else float(center_y_um - float(landmark["tip_dy_um"]))
+                ),
             }
         )
 
     if not matches:
         return None
 
-    offsets = np.array([[item["offset_x_um"], item["offset_y_um"]] for item in matches], dtype=float)
-    median_offset = np.median(offsets, axis=0)
+    guided_tip_points = np.asarray(
+        [
+            [float(item["guided_tip_x_um"]), float(item["guided_tip_y_um"])]
+            for item in matches
+            if item.get("guided_tip_x_um") is not None and item.get("guided_tip_y_um") is not None
+        ],
+        dtype=float,
+    )
+    use_tip_relative_consensus = guided_tip_points.size > 0
+    if use_tip_relative_consensus:
+        median_tip = np.median(guided_tip_points, axis=0)
+    else:
+        offsets = np.array([[item["offset_x_um"], item["offset_y_um"]] for item in matches], dtype=float)
+        median_offset = np.median(offsets, axis=0)
     supporters = []
     for match in matches:
-        residual = float(np.hypot(match["offset_x_um"] - median_offset[0], match["offset_y_um"] - median_offset[1]))
+        if use_tip_relative_consensus and match.get("guided_tip_x_um") is not None and match.get("guided_tip_y_um") is not None:
+            residual = float(
+                np.hypot(
+                    float(match["guided_tip_x_um"]) - float(median_tip[0]),
+                    float(match["guided_tip_y_um"]) - float(median_tip[1]),
+                )
+            )
+        else:
+            residual = float(np.hypot(match["offset_x_um"] - median_offset[0], match["offset_y_um"] - median_offset[1]))
         if residual <= max_residual_um:
             match["residual_um"] = residual
             supporters.append(match)
@@ -281,7 +367,7 @@ def estimate_landmark_consensus(
     mean_score = float(np.mean([item["score"] for item in supporters]))
     mean_gap = float(np.mean([item["score_gap"] for item in supporters]))
     confidence = float(np.clip(0.75 * mean_score + 0.25 * min(mean_gap * 5.0, 1.0), 0.0, 1.0))
-    return {
+    report = {
         "offset_x_um": offset_x_um,
         "offset_y_um": offset_y_um,
         "support_count": len(supporters),
@@ -290,6 +376,13 @@ def estimate_landmark_consensus(
         "confidence": confidence,
         "matches": supporters,
     }
+    if use_tip_relative_consensus:
+        report["estimated_tip_x_um"] = float(np.mean([item["guided_tip_x_um"] for item in supporters]))
+        report["estimated_tip_y_um"] = float(np.mean([item["guided_tip_y_um"] for item in supporters]))
+    else:
+        report["estimated_tip_x_um"] = None
+        report["estimated_tip_y_um"] = None
+    return report
 
 
 def analyze_landmark_geometry(
@@ -663,7 +756,17 @@ def overview_affine_to_fullres(matrix, reference_overview, current_overview):
     return homogeneous_to_affine(full)
 
 
-def build_site_memory(state, stage_history=None, overview=None):
+def build_site_memory(
+    state,
+    stage_history=None,
+    overview=None,
+    live_camera_view=None,
+    reference_template=None,
+    lowmag_landmarks=None,
+    highmag_landmarks=None,
+    reference_top_left_override=None,
+    reference_zoom_level_override=None,
+):
     overview = build_overview(state.surface_image) if overview is None else dict(overview)
     origin_x = float(state.origin_x) if getattr(state, "origin_defined", False) else None
     origin_y = float(state.origin_y) if getattr(state, "origin_defined", False) else None
@@ -672,31 +775,60 @@ def build_site_memory(state, stage_history=None, overview=None):
     site_label = state.origin_label if getattr(state, "origin_defined", False) else "unlabeled_site"
     site_id = sanitize_token(site_label, f"site_{session_id}")
 
-    reference_source = state.current_camera_view if getattr(state, "current_camera_view", None) is not None else state.current_fov_raw
-    reference = to_grayscale_u8(reference_source)
+    live_reference_source = (
+        getattr(state, "current_camera_view", None)
+        if live_camera_view is None
+        else live_camera_view
+    )
+    matching_reference_source = (
+        getattr(state, "current_matching_view", None)
+        if reference_template is None
+        else reference_template
+    )
+    live_reference = to_grayscale_u8(live_reference_source)
+    reference = to_grayscale_u8(matching_reference_source)
+    if reference is None:
+        reference = live_reference
     origin_template = to_grayscale_u8(getattr(state, "origin_template", None))
-    lowmag_landmarks = []
-    if overview is not None:
-        lowmag_landmarks = extract_landmarks(
-            overview["image"],
-            scale_x_um_per_px=overview["scale_x_um_per_px"],
-            scale_y_um_per_px=overview["scale_y_um_per_px"],
+    if lowmag_landmarks is None:
+        lowmag_landmarks = []
+        if overview is not None:
+            lowmag_landmarks = extract_landmarks(
+                overview["image"],
+                base_x_um=float(overview.get("top_left_x_um", 0.0)),
+                base_y_um=float(overview.get("top_left_y_um", 0.0)),
+                scale_x_um_per_px=overview["scale_x_um_per_px"],
+                scale_y_um_per_px=overview["scale_y_um_per_px"],
+                origin_x_um=origin_x,
+                origin_y_um=origin_y,
+                patch_half=18,
+                max_landmarks=8,
+                min_distance_px=18,
+            )
+    else:
+        lowmag_landmarks = [dict(item) for item in lowmag_landmarks]
+    reference_top_left_x = float(state.x)
+    reference_top_left_y = float(state.y)
+    if reference_top_left_override is not None:
+        reference_top_left_x = float(reference_top_left_override[0])
+        reference_top_left_y = float(reference_top_left_override[1])
+    reference_zoom_level = float(
+        state.current_zoom_level if reference_zoom_level_override is None else reference_zoom_level_override
+    )
+    reference_fov_width_um, reference_fov_height_um = state.get_fov_for_zoom_level(reference_zoom_level)
+    if highmag_landmarks is None:
+        highmag_landmarks = extract_landmarks(
+            reference,
+            base_x_um=reference_top_left_x,
+            base_y_um=reference_top_left_y,
             origin_x_um=origin_x,
             origin_y_um=origin_y,
-            patch_half=18,
-            max_landmarks=8,
-            min_distance_px=18,
+            patch_half=24,
+            max_landmarks=6,
+            min_distance_px=22,
         )
-    highmag_landmarks = extract_landmarks(
-        reference,
-        base_x_um=float(state.x),
-        base_y_um=float(state.y),
-        origin_x_um=origin_x,
-        origin_y_um=origin_y,
-        patch_half=24,
-        max_landmarks=6,
-        min_distance_px=22,
-    )
+    else:
+        highmag_landmarks = [dict(item) for item in highmag_landmarks]
     annotate_landmarks_with_tip_geometry(
         highmag_landmarks,
         tip_x_um=float(getattr(state, "probe_tip_x", state.x + state.fov_width / 2.0)),
@@ -705,6 +837,13 @@ def build_site_memory(state, stage_history=None, overview=None):
 
     reference_tip_x = float(getattr(state, "probe_tip_x", state.x + state.fov_width / 2.0))
     reference_tip_y = float(getattr(state, "probe_tip_y", state.y + state.fov_height / 2.0))
+    annotate_landmarks_with_tip_geometry(
+        lowmag_landmarks,
+        tip_x_um=reference_tip_x,
+        tip_y_um=reference_tip_y,
+    )
+    lowmag_ready_min_landmarks = int(getattr(state, "reference_lowmag_min_landmarks", 3))
+    lowmag_ready = bool(len(lowmag_landmarks) >= lowmag_ready_min_landmarks and overview is not None)
     coarse_zoom_level = float(min(getattr(state, "zoom_levels", (state.current_zoom_level,))))
     coarse_fov_width_um, coarse_fov_height_um = state.get_fov_for_zoom_level(coarse_zoom_level)
     coarse_max_x = max(float(state.width_um) - float(coarse_fov_width_um), 0.0)
@@ -730,10 +869,10 @@ def build_site_memory(state, stage_history=None, overview=None):
                 "y_um": origin_y,
             }
         ),
-        "reference_top_left": {"x_um": float(state.x), "y_um": float(state.y)},
+        "reference_top_left": {"x_um": reference_top_left_x, "y_um": reference_top_left_y},
         "reference_center": {
-            "x_um": float(state.x + state.fov_width / 2.0),
-            "y_um": float(state.y + state.fov_height / 2.0),
+            "x_um": float(reference_top_left_x + reference_fov_width_um / 2.0),
+            "y_um": float(reference_top_left_y + reference_fov_height_um / 2.0),
         },
         "coarse_reference_top_left": {"x_um": coarse_top_left_x, "y_um": coarse_top_left_y},
         "coarse_reference_center": {
@@ -745,11 +884,15 @@ def build_site_memory(state, stage_history=None, overview=None):
             "x_um": reference_tip_x,
             "y_um": reference_tip_y,
         },
+        "reference_tip_local": {
+            "x_um": float(reference_tip_x - reference_top_left_x),
+            "y_um": float(reference_tip_y - reference_top_left_y),
+        },
         "coarse_fov_size_um": {"width_um": float(coarse_fov_width_um), "height_um": float(coarse_fov_height_um)},
-        "fov_size_um": {"width_um": float(state.fov_width), "height_um": float(state.fov_height)},
+        "fov_size_um": {"width_um": float(reference_fov_width_um), "height_um": float(reference_fov_height_um)},
         "coarse_zoom_level": coarse_zoom_level,
-        "final_zoom_level": float(state.current_zoom_level),
-        "zoom_level": float(state.current_zoom_level),
+        "final_zoom_level": float(reference_zoom_level),
+        "zoom_level": float(reference_zoom_level),
         "magnification": float(state.get_current_objective_magnification()),
         "tilt_angle_deg": 0.0,
         "focus_state": {
@@ -757,9 +900,14 @@ def build_site_memory(state, stage_history=None, overview=None):
             "focus_offset_um": float(state.get_focus_offset_um()),
             "blur_sigma_px": float(getattr(state, "last_blur_sigma_px", 0.0)),
         },
+        "lowmag_ready": lowmag_ready,
+        "lowmag_ready_min_landmarks": lowmag_ready_min_landmarks,
         "motion_history_points": int(0 if stage_history is None else len(stage_history)),
         "overview": overview,
+        "live_camera_view": live_reference.copy() if live_reference is not None else None,
         "reference_template": reference,
+        "reference_view_kind": "saved_live_camera_frame",
+        "reference_view_zoom_level": float(reference_zoom_level),
         "origin_template": origin_template,
         "lowmag_landmarks": lowmag_landmarks,
         "highmag_landmarks": highmag_landmarks,
@@ -789,7 +937,8 @@ def _landmark_metadata(landmark, file_name):
         "tip_dy_um": None if landmark.get("tip_dy_um") is None else float(landmark["tip_dy_um"]),
         "tip_distance_um": None if landmark.get("tip_distance_um") is None else float(landmark["tip_distance_um"]),
         "tip_angle_deg": None if landmark.get("tip_angle_deg") is None else float(landmark["tip_angle_deg"]),
-        "patch_path": str(file_name),
+        "manual": bool(landmark.get("manual", False)),
+        "patch_path": PurePosixPath(file_name).as_posix(),
     }
 
 
@@ -801,7 +950,14 @@ def persist_site_memory(site_memory, base_dir):
     metadata = {
         key: value
         for key, value in site_memory.items()
-        if key not in {"overview", "reference_template", "origin_template", "lowmag_landmarks", "highmag_landmarks"}
+        if key not in {
+            "overview",
+            "live_camera_view",
+            "reference_template",
+            "origin_template",
+            "lowmag_landmarks",
+            "highmag_landmarks",
+        }
     }
 
     overview = site_memory.get("overview")
@@ -812,6 +968,9 @@ def persist_site_memory(site_memory, base_dir):
             "scale_x_um_per_px": float(overview["scale_x_um_per_px"]),
             "scale_y_um_per_px": float(overview["scale_y_um_per_px"]),
         }
+
+    live_camera_path = _write_image(output_dir / "live_camera_view.png", site_memory.get("live_camera_view"))
+    metadata["live_camera_view_path"] = None if live_camera_path is None else live_camera_path.name
 
     reference_path = _write_image(output_dir / "reference_template.png", site_memory.get("reference_template"))
     metadata["reference_template_path"] = None if reference_path is None else reference_path.name
@@ -846,10 +1005,16 @@ def load_site_memory(site_dir):
         raise FileNotFoundError(f"Site-memory metadata not found: {metadata_path}")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
+    def _resolve_metadata_path(path_value):
+        if not path_value:
+            return None
+        normalized = str(path_value).replace("\\", "/")
+        return site_dir / Path(PurePosixPath(normalized))
+
     overview = metadata.get("overview")
     if overview is not None:
         overview = {
-            "image": to_grayscale_u8(cv2.imread(str(site_dir / overview["image_path"]), cv2.IMREAD_GRAYSCALE)),
+            "image": to_grayscale_u8(cv2.imread(str(_resolve_metadata_path(overview["image_path"])), cv2.IMREAD_GRAYSCALE)),
             "scale_x_um_per_px": float(overview["scale_x_um_per_px"]),
             "scale_y_um_per_px": float(overview["scale_y_um_per_px"]),
         }
@@ -857,7 +1022,8 @@ def load_site_memory(site_dir):
     def _load_landmarks(items):
         loaded = []
         for item in items or []:
-            patch = to_grayscale_u8(cv2.imread(str(site_dir / item["patch_path"]), cv2.IMREAD_GRAYSCALE))
+            patch_path = _resolve_metadata_path(item.get("patch_path"))
+            patch = None if patch_path is None else to_grayscale_u8(cv2.imread(str(patch_path), cv2.IMREAD_GRAYSCALE))
             loaded.append(
                 {
                     "center_px": (int(item["center_px"][0]), int(item["center_px"][1])),
@@ -870,6 +1036,7 @@ def load_site_memory(site_dir):
                     "tip_dy_um": None if item.get("tip_dy_um") is None else float(item["tip_dy_um"]),
                     "tip_distance_um": None if item.get("tip_distance_um") is None else float(item["tip_distance_um"]),
                     "tip_angle_deg": None if item.get("tip_angle_deg") is None else float(item["tip_angle_deg"]),
+                    "manual": bool(item.get("manual", False)),
                     "patch": patch,
                 }
             )
@@ -877,11 +1044,34 @@ def load_site_memory(site_dir):
 
     site_memory = dict(metadata)
     site_memory["overview"] = overview
+    live_camera_view = None
+    if metadata.get("live_camera_view_path"):
+        live_camera_view = to_grayscale_u8(
+            cv2.imread(str(_resolve_metadata_path(metadata["live_camera_view_path"])), cv2.IMREAD_GRAYSCALE)
+        )
+    site_memory["live_camera_view"] = live_camera_view
     site_memory["reference_template"] = to_grayscale_u8(
-        cv2.imread(str(site_dir / metadata["reference_template_path"]), cv2.IMREAD_GRAYSCALE)
+        cv2.imread(str(_resolve_metadata_path(metadata["reference_template_path"])), cv2.IMREAD_GRAYSCALE)
     ) if metadata.get("reference_template_path") else None
+    if site_memory["live_camera_view"] is None:
+        site_memory["live_camera_view"] = (
+            None if site_memory["reference_template"] is None else site_memory["reference_template"].copy()
+        )
+    if site_memory.get("reference_tip_local") is None:
+        ref_tip = site_memory.get("reference_tip") or {}
+        ref_top_left = site_memory.get("reference_top_left") or {}
+        if (
+            ref_tip.get("x_um") is not None
+            and ref_tip.get("y_um") is not None
+            and ref_top_left.get("x_um") is not None
+            and ref_top_left.get("y_um") is not None
+        ):
+            site_memory["reference_tip_local"] = {
+                "x_um": float(ref_tip["x_um"]) - float(ref_top_left["x_um"]),
+                "y_um": float(ref_tip["y_um"]) - float(ref_top_left["y_um"]),
+            }
     site_memory["origin_template"] = to_grayscale_u8(
-        cv2.imread(str(site_dir / metadata["origin_template_path"]), cv2.IMREAD_GRAYSCALE)
+        cv2.imread(str(_resolve_metadata_path(metadata["origin_template_path"])), cv2.IMREAD_GRAYSCALE)
     ) if metadata.get("origin_template_path") else None
     site_memory["lowmag_landmarks"] = _load_landmarks(metadata.get("lowmag_landmarks"))
     site_memory["highmag_landmarks"] = _load_landmarks(metadata.get("highmag_landmarks"))

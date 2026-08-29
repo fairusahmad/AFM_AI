@@ -1,3 +1,5 @@
+import csv
+import itertools
 import random
 import tkinter as tk
 from pathlib import Path
@@ -13,6 +15,7 @@ from afm_phase2_ml import (
     retrieve_lowmag_candidates,
     score_same_site_probability,
 )
+from afm_phase2_ml import pair_features
 from afm_ml_recognition import (
     DeepFeatureExtractor,
     MLPatternMatcher,
@@ -25,6 +28,7 @@ from afm_ml_recognition import (
 )
 from afm_relocation import (
     analyze_landmark_geometry,
+    annotate_landmarks_with_tip_geometry,
     apply_affine,
     build_overview,
     build_overview_from_view,
@@ -36,13 +40,15 @@ from afm_relocation import (
     invert_affine,
     load_site_memory,
     match_template_candidates,
+    merge_landmark_sets,
     persist_site_memory,
     rotation_translation_affine,
     transform_point,
     translate_image,
+    to_grayscale_u8,
 )
 from afm_utils import create_stage_fov, render_camera_frame
-from afm_utils import render_camera_recognition_frame
+from afm_utils import render_camera_matching_frame, render_camera_recognition_frame
 from artefact_detector import ArtefactDetector
 from image_matching import match_reference_template
 from sample_generation import load_real_sample_image, load_real_sample_image_from_scale
@@ -61,6 +67,7 @@ class AFMCallbacks:
     PROBE_TRIANGULAR_TIP_LENGTH_UM = 15.0
     PROBE_VISIBLE_BODY_DEPTH_UM = 3400
     VIEWPORT_ARROW_HIT_RADIUS_AX = 0.07
+    MATCHING_RESOLUTION = (512, 384)
 
     def __init__(
         self,
@@ -97,6 +104,7 @@ class AFMCallbacks:
         self.same_site_classifier = None
         self.remount_transform_predictor = None
         self.lowmag_embedding_index = None
+        self.lowmag_landmark_regressor = None
         self.busy_actions = set()
         self.log_callback = None
         self.status_callback = None
@@ -134,6 +142,10 @@ class AFMCallbacks:
         self.lowmag_embedding_index = self._load_optional_model(
             phase2_models_dir / "lowmag_embedding_index.pkl",
             "low-mag embedding index",
+        )
+        self.lowmag_landmark_regressor = self._load_optional_model(
+            phase2_models_dir / "lowmag_landmark_regressor.pkl",
+            "low-mag landmark regressor",
         )
 
         # ── Deep ML 模型 (ResNet18 特征 + MLP) ──
@@ -241,6 +253,679 @@ class AFMCallbacks:
 
     def _end_action(self, action_name):
         self.busy_actions.discard(action_name)
+
+    def _camera_frame_only_relocation_enabled(self):
+        return bool(getattr(self.state, "relocation_use_camera_frames_only", False))
+
+    def _lowmag_only_relocation_enabled(self):
+        return bool(getattr(self.state, "relocation_lowmag_only_mode", False))
+
+    def _site_memory_lowmag_ready(self, site_memory=None):
+        site_memory = (self.state.site_memory if site_memory is None else site_memory) or {}
+        lowmag_landmarks = site_memory.get("lowmag_landmarks") or []
+        min_landmarks = int(site_memory.get("lowmag_ready_min_landmarks", self.state.reference_lowmag_min_landmarks))
+        if site_memory.get("lowmag_ready") is not None:
+            return bool(site_memory.get("lowmag_ready"))
+        return bool(site_memory.get("overview") is not None and len(lowmag_landmarks) >= min_landmarks)
+
+    def _get_current_relocation_view(self, prefer_matching=False):
+        if prefer_matching:
+            return (
+                self.state.current_matching_view
+                if self.state.current_matching_view is not None
+                else self.state.current_camera_view
+        )
+        return (
+            self.state.current_camera_view
+            if self.state.current_camera_view is not None
+            else self.state.current_matching_view
+        )
+
+    def _predict_lowmag_candidate_target(self, coarse_candidate):
+        if coarse_candidate is None:
+            return None
+        predicted_dx_um = None
+        predicted_dy_um = None
+        ml_correction = coarse_candidate.get("ml_correction")
+        if ml_correction is not None:
+            predicted_dx_um = float(ml_correction["predicted_dx_um"])
+            predicted_dy_um = float(ml_correction["predicted_dy_um"])
+        elif (
+            coarse_candidate.get("estimated_tip_dx_um") is not None
+            and coarse_candidate.get("estimated_tip_dy_um") is not None
+        ):
+            predicted_dx_um = float(coarse_candidate["estimated_tip_dx_um"])
+            predicted_dy_um = float(coarse_candidate["estimated_tip_dy_um"])
+        if predicted_dx_um is None or predicted_dy_um is None:
+            return None
+        current_tip_x = float(getattr(self.state, "probe_tip_x", self.state.x + self.state.fov_width * 0.5))
+        current_tip_y = float(getattr(self.state, "probe_tip_y", self.state.y + self.state.fov_height * 0.5))
+        return self._clamp_to_stage_margin(
+            current_tip_x + predicted_dx_um - float(self.state.fov_width) * 0.5,
+            current_tip_y + predicted_dy_um - float(self.state.fov_height) * 0.5,
+        )
+
+    def _relocate_using_current_camera_frame(self, mode_label):
+        if self.state.site_memory is None:
+            self._try_load_latest_site_memory()
+        if self.state.site_memory is not None and self.state.ref_template is None:
+            self._activate_site_memory(self.state.site_memory, source_dir=self.state.last_saved_site_dir)
+        if self.state.ref_template is None:
+            self.log("Please save reference position first")
+            return
+
+        site_memory = self.state.site_memory or {}
+        self.log(f"{mode_label}: using camera-frame-only relocation (true sample image disabled)")
+        coarse_result = None
+        fine_match = None
+        verification = None
+        lowmag_only_mode = self._lowmag_only_relocation_enabled()
+        final_zoom = float(site_memory.get("final_zoom_level", site_memory.get("zoom_level", self.state.current_zoom_level)))
+        if self._site_memory_lowmag_ready(site_memory):
+            coarse_zoom = float(
+                (site_memory.get("overview") or {}).get(
+                    "zoom_level",
+                    site_memory.get("coarse_zoom_level", min(self.state.zoom_levels)),
+                )
+            )
+            if not np.isclose(float(self.state.current_zoom_level), coarse_zoom):
+                self._begin_quantized_zoom(coarse_zoom)
+                self.log(f"{mode_label}: switching to low magnification {coarse_zoom:.2f}x for landmark search")
+                self._wait_for_zoom_complete()
+            coarse_result = self._run_lowmag_landmark_search(site_memory=site_memory, zoom_level=coarse_zoom)
+        elif site_memory.get("lowmag_landmarks"):
+            self.log(
+                f"{mode_label}: skipping coarse low-mag relocation because saved site memory is not low-mag ready "
+                f"({len(site_memory.get('lowmag_landmarks', []))} landmarks)."
+            )
+        if lowmag_only_mode:
+            self.log(f"{mode_label}: low-magnification-only mode enabled; staying at coarse zoom.")
+        if not lowmag_only_mode and not np.isclose(float(self.state.current_zoom_level), final_zoom):
+            self._begin_quantized_zoom(final_zoom)
+            self.log(f"{mode_label}: returning to saved final zoom {final_zoom:.2f}x")
+            self._wait_for_zoom_complete()
+
+        coarse_candidates = []
+        if coarse_result is not None:
+            coarse_candidates = list(coarse_result.get("coarse_candidates", []))
+            if not coarse_candidates:
+                coarse_candidates = [coarse_result]
+        evaluated_candidates = []
+        fine_try_count = max(int(self.state.lowmag_search_fine_try_count), 1)
+        if lowmag_only_mode and coarse_candidates:
+            best_coarse_candidate = max(
+                coarse_candidates,
+                key=lambda item: (
+                    float(item.get("candidate_rank_score", float("-inf"))),
+                    self._score_lowmag_search_candidate(item),
+                ),
+            )
+            predicted_target = self._predict_lowmag_candidate_target(best_coarse_candidate)
+            if predicted_target is not None:
+                self._jump_view_to_target(predicted_target[0], predicted_target[1])
+                coarse_result["selected_candidate_index"] = int(best_coarse_candidate.get("search_index", 1))
+                coarse_result["selected_candidate_target_x_um"] = float(predicted_target[0])
+                coarse_result["selected_candidate_target_y_um"] = float(predicted_target[1])
+                verification = {
+                    "verified": False,
+                    "reference_score": float(best_coarse_candidate.get("overview_similarity", 0.0)),
+                    "reference_score_gap": float(best_coarse_candidate.get("candidate_rank_gap", 0.0)),
+                    "mode": "lowmag_only",
+                }
+                self.log(
+                    "Low-mag coarse relocation applied: "
+                    f"target X={predicted_target[0]:.1f} um, Y={predicted_target[1]:.1f} um, "
+                    f"support={best_coarse_candidate.get('support_count', 0)}, "
+                    f"conf={best_coarse_candidate.get('confidence', 0.0):.3f}, "
+                    f"geom={best_coarse_candidate.get('geometry_confidence', 0.0):.3f}, "
+                    f"overview={best_coarse_candidate.get('overview_similarity', 0.0):.3f}"
+                )
+                self.log(
+                    "Low-mag-only mode stops here. High-magnification refinement and verification are intentionally disabled."
+                )
+            else:
+                self.log("Low-mag-only mode could not derive a usable coarse jump from the saved landmarks.")
+        elif coarse_candidates:
+            self.log(
+                f"{mode_label}: evaluating {min(len(coarse_candidates), fine_try_count)} low-mag candidate(s) at final zoom"
+            )
+            for index, coarse_candidate in enumerate(coarse_candidates[:fine_try_count], start=1):
+                predicted_target = self._predict_lowmag_candidate_target(coarse_candidate)
+                if predicted_target is None:
+                    continue
+                predicted_x, predicted_y = predicted_target
+                self._jump_view_to_target(predicted_x, predicted_y)
+                self.log(
+                    "Low-mag candidate "
+                    f"{index}: target X={predicted_x:.1f} um, Y={predicted_y:.1f} um, "
+                    f"support={coarse_candidate.get('support_count', 0)}, "
+                    f"conf={coarse_candidate.get('confidence', 0.0):.3f}, "
+                    f"geom={coarse_candidate.get('geometry_confidence', 0.0):.3f}, "
+                    f"overview={coarse_candidate.get('overview_similarity', 0.0):.3f}"
+                )
+                if index == 1:
+                    self.log(
+                        "If the viewport is moving too slowly, press the 'Relocation Go Now' button to jump immediately."
+                    )
+                candidate_fine_match = self._match_camera_template(
+                    self.state.ref_template,
+                    float(self.state.x),
+                    float(self.state.y),
+                    half_range_um=float(self.state.relocation_fine_half_range_um),
+                )
+                candidate_verification = self._verify_relocation(
+                    float(self.state.x),
+                    float(self.state.y),
+                    site_memory=site_memory,
+                )
+                evaluated_candidates.append(
+                    {
+                        "coarse_candidate": coarse_candidate,
+                        "target_x_um": float(self.state.x),
+                        "target_y_um": float(self.state.y),
+                        "fine_match": candidate_fine_match,
+                        "verification": candidate_verification,
+                    }
+                )
+                self.log(
+                    "High-mag re-check "
+                    f"{index}: fine score={0.0 if candidate_fine_match is None else candidate_fine_match.get('score', 0.0):.3f}, "
+                    f"verify={candidate_verification.get('verified', False)}, "
+                    f"reference={candidate_verification.get('reference_score', 0.0):.3f}, "
+                    f"gap={candidate_verification.get('reference_score_gap', 0.0):.3f}"
+                )
+                if candidate_verification.get("verified", False):
+                    break
+
+        if evaluated_candidates:
+            evaluated_candidates.sort(
+                key=lambda item: (
+                    1 if item["verification"].get("verified", False) else 0,
+                    float(item["verification"].get("reference_score", 0.0)),
+                    -float(item["verification"].get("reference_score_gap", 0.0)),
+                    -float(0.0 if item["fine_match"] is None else item["fine_match"].get("score", 0.0)),
+                    float(item["coarse_candidate"].get("candidate_rank_score", 0.0)),
+                ),
+                reverse=True,
+            )
+            best_eval = evaluated_candidates[0]
+            self._jump_view_to_target(best_eval["target_x_um"], best_eval["target_y_um"])
+            fine_match = best_eval["fine_match"]
+            verification = best_eval["verification"]
+            if coarse_result is not None:
+                coarse_result["selected_candidate_index"] = int(
+                    best_eval["coarse_candidate"].get("search_index", 1)
+                )
+                coarse_result["selected_candidate_target_x_um"] = float(best_eval["target_x_um"])
+                coarse_result["selected_candidate_target_y_um"] = float(best_eval["target_y_um"])
+                coarse_result["evaluated_candidate_count"] = int(len(evaluated_candidates))
+        else:
+            fine_match = self._match_camera_template(
+                self.state.ref_template,
+                float(self.state.x),
+                float(self.state.y),
+                half_range_um=float(self.state.relocation_fine_half_range_um),
+            )
+            verification = self._verify_relocation(
+                float(self.state.x),
+                float(self.state.y),
+                site_memory=site_memory,
+            )
+
+        self.state.last_relocation_report = {
+            "affine": None,
+            "coarse": coarse_result,
+            "fine_affine": None,
+            "fine": fine_match,
+            "predicted_current_top_left": {"x_um": float(self.state.x), "y_um": float(self.state.y)},
+            "verification": verification,
+        }
+
+        if fine_match is not None:
+            self.log(
+                "Camera-frame reference match: "
+                f"score={fine_match['score']:.3f}, gap={fine_match.get('score_gap', 0.0):.3f}"
+            )
+        if coarse_result is not None:
+            self.log(
+                "Camera low-mag guidance: "
+                f"dX={coarse_result['offset_x_um']:+.1f} um, "
+                f"dY={coarse_result['offset_y_um']:+.1f} um, "
+                f"support={coarse_result['support_count']}, "
+                f"confidence={coarse_result['confidence']:.3f}"
+            )
+
+        if lowmag_only_mode:
+            if coarse_result is not None:
+                self.state.sample_removed = False
+            else:
+                self.log(
+                    "Low-mag-only relocation did not produce a usable coarse result. "
+                    "Stay at low magnification and adjust landmarks or region manually."
+                )
+                self._enter_manual_landmark_guidance(float(self.state.x), float(self.state.y))
+            return
+
+        if verification.get("verified", False):
+            self.state.sample_removed = False
+            self.log(
+                "Relocation verified from camera frames only: "
+                f"reference score={verification['reference_score']:.3f}, "
+                f"gap={verification['reference_score_gap']:.3f}"
+            )
+            return
+
+        self.log(
+            "Camera-frame relocation did not verify the site: "
+            f"reference score={verification.get('reference_score', 0.0):.3f}, "
+            f"gap={verification.get('reference_score_gap', 0.0):.3f}"
+        )
+        self._enter_manual_landmark_guidance(float(self.state.x), float(self.state.y))
+
+    def _score_lowmag_search_candidate(self, report):
+        if report is None:
+            return (-1, -1.0, float("-inf"))
+        support = int(report.get("support_count", 0))
+        geometry_confidence = float(report.get("geometry_confidence", 0.0))
+        confidence = float(report.get("confidence", 0.0))
+        overview_similarity = float(report.get("overview_similarity", 0.0))
+        distance_confidence = float(report.get("distance_confidence", 0.0))
+        manual_constellation_confidence = float(report.get("manual_constellation_confidence", 0.0))
+        tip_distance = report.get("estimated_tip_distance_um")
+        if tip_distance is None:
+            tip_distance = float("inf")
+        return (
+            support,
+            manual_constellation_confidence,
+            geometry_confidence,
+            confidence,
+            distance_confidence,
+            overview_similarity,
+            -float(tip_distance),
+        )
+
+    def _numeric_lowmag_search_score(self, report):
+        if report is None:
+            return float("-inf")
+        support_term = min(float(report.get("support_count", 0)), 5.0) / 5.0
+        geometry_term = float(report.get("geometry_confidence", 0.0))
+        confidence_term = float(report.get("confidence", 0.0))
+        overview_term = max(float(report.get("overview_similarity", 0.0)), 0.0)
+        distance_term = float(report.get("distance_confidence", 0.0))
+        constellation_term = float(report.get("manual_constellation_confidence", 0.0))
+        return float(
+            0.20 * support_term
+            + 0.22 * geometry_term
+            + 0.18 * confidence_term
+            + 0.12 * distance_term
+            + 0.08 * overview_term
+            + 0.20 * constellation_term
+        )
+
+    def _save_lowmag_search_trace(self, search_trace, best_report=None, site_memory=None):
+        if not search_trace:
+            return None
+        sample_name = str((site_memory or {}).get("sample_image", "sample")).strip() or "sample"
+        site_name = str((site_memory or {}).get("site_name", "site")).strip() or "site"
+        safe_sample = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in sample_name)
+        safe_site = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in site_name)
+        timestamp = __import__("time").strftime("%Y%m%d_%H%M%S")
+        output_dir = BASE_DIR / "collected_data" / "relocation_debug"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"lowmag_search_trace_{safe_sample}_{safe_site}_{timestamp}.csv"
+        fieldnames = [
+            "index",
+            "ring",
+            "grid_dx",
+            "grid_dy",
+            "x_um",
+            "y_um",
+            "support_count",
+            "confidence",
+            "overview_similarity",
+            "estimated_tip_dx_um",
+            "estimated_tip_dy_um",
+            "estimated_tip_distance_um",
+            "ml_predicted_offset_x_um",
+            "ml_predicted_offset_y_um",
+        ]
+        with output_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in search_trace:
+                writer.writerow({name: row.get(name) for name in fieldnames})
+        if best_report is not None:
+            best_report["search_trace_csv"] = str(output_path)
+        return output_path
+
+    def _predict_lowmag_landmark_correction(self, report, reference_overview, current_overview):
+        bundle = self.lowmag_landmark_regressor
+        model = None if bundle is None else bundle.get("model")
+        if model is None or report is None or reference_overview is None or current_overview is None:
+            return None
+        reference_image = to_grayscale_u8(reference_overview.get("image"))
+        current_image = to_grayscale_u8(current_overview.get("image"))
+        if reference_image is None or current_image is None:
+            return None
+
+        geom_features = np.array(
+            [
+                float(report.get("support_count", 0)),
+                float(report.get("confidence", 0.0)),
+                float(report.get("offset_x_um", 0.0)),
+                float(report.get("offset_y_um", 0.0)),
+                float(np.hypot(float(report.get("offset_x_um", 0.0)), float(report.get("offset_y_um", 0.0)))),
+            ],
+            dtype=np.float32,
+        )
+        img_features = pair_features(reference_image, current_image).astype(np.float32)
+        features = np.concatenate([geom_features, img_features]).reshape(1, -1)
+        try:
+            prediction = np.asarray(model.predict(features), dtype=np.float32).reshape(-1)
+        except Exception as exc:
+            self.log(f"Low-mag landmark regressor inference failed: {exc}")
+            return None
+        if prediction.size < 2:
+            return None
+        correction_dx_um = float(prediction[0])
+        correction_dy_um = float(prediction[1])
+        return {
+            "correction_dx_um": correction_dx_um,
+            "correction_dy_um": correction_dy_um,
+            "predicted_dx_um": float(report.get("offset_x_um", 0.0)) + correction_dx_um,
+            "predicted_dy_um": float(report.get("offset_y_um", 0.0)) + correction_dy_um,
+        }
+
+    def _iter_lowmag_search_positions(self, anchor_x_um, anchor_y_um, step_x_um, step_y_um, max_rings):
+        seen = set()
+        for ring in range(0, max(int(max_rings), 0) + 1):
+            ring_positions = []
+            if ring == 0:
+                ring_positions.append((0, 0))
+            else:
+                for dy_index in range(-ring, ring + 1):
+                    for dx_index in range(-ring, ring + 1):
+                        if max(abs(dx_index), abs(dy_index)) != ring:
+                            continue
+                        ring_positions.append((dx_index, dy_index))
+                ring_positions.sort(key=lambda item: (abs(item[0]) + abs(item[1]), abs(item[1]), abs(item[0])))
+            for dx_index, dy_index in ring_positions:
+                candidate_x, candidate_y = self._clamp_to_stage_margin(
+                    float(anchor_x_um) + float(dx_index) * float(step_x_um),
+                    float(anchor_y_um) + float(dy_index) * float(step_y_um),
+                )
+                key = (round(float(candidate_x), 3), round(float(candidate_y), 3))
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield {
+                    "ring": int(ring),
+                    "grid_dx": int(dx_index),
+                    "grid_dy": int(dy_index),
+                    "x_um": float(candidate_x),
+                    "y_um": float(candidate_y),
+                }
+
+    def _run_lowmag_landmark_search(self, *, site_memory=None, zoom_level=None):
+        site_memory = self.state.site_memory if site_memory is None else site_memory
+        site_memory = site_memory or {}
+        lowmag_landmarks = site_memory.get("lowmag_landmarks") or []
+        if not lowmag_landmarks:
+            self.state.lowmag_guidance_report = None
+            return None
+        if len(lowmag_landmarks) < 2:
+            self.state.lowmag_guidance_report = None
+            self.log(
+                "Low-mag landmark search skipped: saved site has fewer than 2 low-mag landmarks. "
+                "Capture several landmarks before relying on automatic coarse relocation."
+            )
+            return None
+        reference_overview = site_memory.get("overview") or {}
+
+        zoom_level = float(
+            self.state.current_zoom_level if zoom_level is None else zoom_level
+        )
+        if not np.isclose(float(self.state.current_zoom_level), zoom_level):
+            self._begin_quantized_zoom(zoom_level)
+            self._wait_for_zoom_complete()
+
+        anchor_x_um = float(self.state.x)
+        anchor_y_um = float(self.state.y)
+        step_x_um = max(20.0, float(self.state.fov_width) * float(self.state.lowmag_search_step_fraction))
+        step_y_um = max(20.0, float(self.state.fov_height) * float(self.state.lowmag_search_step_fraction))
+        min_support = max(int(self.state.relocation_min_landmark_support), int(self.state.lowmag_search_min_support))
+        min_confidence = max(
+            float(self.state.relocation_min_match_score) - 0.04,
+            float(self.state.lowmag_search_min_confidence),
+        )
+        min_geometry_confidence = float(self.state.lowmag_search_min_geometry_confidence)
+        min_overview_similarity = float(self.state.lowmag_search_min_overview_similarity)
+        candidate_limit = max(int(self.state.lowmag_search_candidate_limit), 1)
+        fast_fail_enabled = bool(getattr(self.state, "lowmag_search_fast_fail_enabled", True))
+        fast_fail_max_frames = max(int(getattr(self.state, "lowmag_search_fast_fail_max_frames", 6)), 1)
+        fast_fail_min_support = max(int(getattr(self.state, "lowmag_search_fast_fail_min_support", 2)), 1)
+        fast_fail_min_confidence = float(getattr(self.state, "lowmag_search_fast_fail_min_confidence", 0.55))
+        fast_fail_min_overview_similarity = float(
+            getattr(self.state, "lowmag_search_fast_fail_min_overview_similarity", 0.45)
+        )
+        manual_authoritative = site_memory.get("lowmag_landmark_source") == "manual_authoritative"
+        reference_overview_image = to_grayscale_u8(reference_overview.get("image"))
+
+        best_report = None
+        best_position = None
+        candidate_reports = []
+        search_trace = []
+        stop_reason = "not_found"
+
+        for index, candidate in enumerate(
+            self._iter_lowmag_search_positions(
+                anchor_x_um,
+                anchor_y_um,
+                step_x_um,
+                step_y_um,
+                self.state.lowmag_search_max_rings,
+            ),
+            start=1,
+        ):
+            self._jump_view_to_target(candidate["x_um"], candidate["y_um"])
+            overview = self._build_camera_overview(
+                zoom_level=zoom_level,
+                center_x_um=float(self.state.probe_tip_x),
+                center_y_um=float(self.state.probe_tip_y),
+            )
+            report = self._build_lowmag_guidance_report(overview, site_memory=site_memory)
+            trace_entry = {
+                "index": int(index),
+                "ring": int(candidate["ring"]),
+                "grid_dx": int(candidate["grid_dx"]),
+                "grid_dy": int(candidate["grid_dy"]),
+                "x_um": float(self.state.x),
+                "y_um": float(self.state.y),
+                "support_count": 0 if report is None else int(report.get("support_count", 0)),
+                "confidence": 0.0 if report is None else float(report.get("confidence", 0.0)),
+                "overview_similarity": 0.0,
+                "estimated_tip_dx_um": None if report is None else report.get("estimated_tip_dx_um"),
+                "estimated_tip_dy_um": None if report is None else report.get("estimated_tip_dy_um"),
+                "estimated_tip_distance_um": (
+                    None if report is None else report.get("estimated_tip_distance_um")
+                ),
+                "ml_predicted_offset_x_um": None,
+                "ml_predicted_offset_y_um": None,
+            }
+            if report is not None:
+                report = dict(report)
+                report["overview"] = overview
+                report["overview_similarity"] = self._score_matching_views(
+                    reference_overview_image,
+                    overview.get("image"),
+                )
+                trace_entry["overview_similarity"] = float(report["overview_similarity"])
+                ml_correction = self._predict_lowmag_landmark_correction(
+                    report,
+                    reference_overview,
+                    overview,
+                )
+                if ml_correction is not None:
+                    report["ml_correction"] = ml_correction
+                    report["ml_predicted_offset_x_um"] = float(ml_correction["predicted_dx_um"])
+                    report["ml_predicted_offset_y_um"] = float(ml_correction["predicted_dy_um"])
+                    trace_entry["ml_predicted_offset_x_um"] = report["ml_predicted_offset_x_um"]
+                    trace_entry["ml_predicted_offset_y_um"] = report["ml_predicted_offset_y_um"]
+                self.log(
+                    "Low-mag search frame "
+                    f"{index}: ring={candidate['ring']}, "
+                    f"X={self.state.x:.1f} um, Y={self.state.y:.1f} um, "
+                    f"support={trace_entry['support_count']}, "
+                    f"confidence={trace_entry['confidence']:.3f}, "
+                    f"overview={trace_entry['overview_similarity']:.3f}"
+                )
+                if best_report is None or self._score_lowmag_search_candidate(report) > self._score_lowmag_search_candidate(best_report):
+                    best_report = dict(report)
+                    best_position = (float(self.state.x), float(self.state.y))
+                if (
+                    trace_entry["support_count"] >= max(min_support - 1, 2)
+                    or report.get("geometry_confidence", 0.0) >= max(min_geometry_confidence - 0.05, 0.20)
+                    or trace_entry["confidence"] >= max(min_confidence - 0.06, 0.30)
+                ):
+                    candidate_copy = dict(report)
+                    candidate_copy["search_index"] = int(index)
+                    candidate_copy["search_ring"] = int(candidate["ring"])
+                    candidate_copy["search_grid_dx"] = int(candidate["grid_dx"])
+                    candidate_copy["search_grid_dy"] = int(candidate["grid_dy"])
+                    candidate_copy["search_top_left_x_um"] = float(self.state.x)
+                    candidate_copy["search_top_left_y_um"] = float(self.state.y)
+                    candidate_copy["candidate_rank_score"] = self._numeric_lowmag_search_score(candidate_copy)
+                    candidate_reports.append(candidate_copy)
+                if (
+                    int(candidate["ring"]) >= 1
+                    and
+                    (
+                        (
+                            trace_entry["support_count"] >= min_support
+                            and trace_entry["confidence"] >= min_confidence
+                            and float(report.get("geometry_confidence", 0.0)) >= min_geometry_confidence
+                            and float(report.get("overview_similarity", 0.0)) >= min_overview_similarity
+                        )
+                        or (
+                            manual_authoritative
+                            and trace_entry["support_count"] >= max(2, min_support - 1)
+                            and float(report.get("manual_constellation_confidence", 0.0)) >= max(0.40, min_geometry_confidence)
+                        )
+                    )
+                ):
+                    stop_reason = "threshold_reached"
+                    search_trace.append(trace_entry)
+                    break
+                if (
+                    fast_fail_enabled
+                    and int(index) >= fast_fail_max_frames
+                    and (
+                        (
+                            not manual_authoritative
+                            and (
+                                trace_entry["support_count"] < fast_fail_min_support
+                                or trace_entry["confidence"] < fast_fail_min_confidence
+                                or trace_entry["overview_similarity"] < fast_fail_min_overview_similarity
+                            )
+                        )
+                        or (
+                            manual_authoritative
+                            and trace_entry["support_count"] < max(2, fast_fail_min_support)
+                            and float(report.get("manual_constellation_confidence", 0.0)) < 0.40
+                        )
+                    )
+                ):
+                    stop_reason = "fast_fail_weak_lowmag"
+                    search_trace.append(trace_entry)
+                    break
+            search_trace.append(trace_entry)
+
+        if best_position is not None:
+            self._jump_view_to_target(best_position[0], best_position[1])
+        if best_report is None:
+            self.state.lowmag_guidance_report = None
+            self.log("Low-mag landmark search did not find a usable landmark constellation.")
+            return None
+        if (
+            stop_reason == "fast_fail_weak_lowmag"
+            and (
+                (
+                    not manual_authoritative
+                    and (
+                        int(best_report.get("support_count", 0)) < fast_fail_min_support
+                        or float(best_report.get("confidence", 0.0)) < fast_fail_min_confidence
+                        or float(best_report.get("overview_similarity", 0.0)) < fast_fail_min_overview_similarity
+                    )
+                )
+                or (
+                    manual_authoritative
+                    and int(best_report.get("support_count", 0)) < max(2, fast_fail_min_support)
+                    and float(best_report.get("manual_constellation_confidence", 0.0)) < 0.40
+                )
+            )
+        ):
+            self.state.lowmag_guidance_report = None
+            self.log(
+                "Low-mag landmark search fast-failed on weak evidence. "
+                "Skipping coarse jump and falling back to fine camera verification."
+            )
+            return None
+
+        best_report["search_trace"] = search_trace
+        best_report["search_frames"] = len(search_trace)
+        best_report["search_step_x_um"] = float(step_x_um)
+        best_report["search_step_y_um"] = float(step_y_um)
+        best_report["search_stop_reason"] = str(stop_reason)
+        best_report["search_best_top_left_x_um"] = float(best_position[0])
+        best_report["search_best_top_left_y_um"] = float(best_position[1])
+        best_report["overview_similarity"] = float(best_report.get("overview_similarity", 0.0))
+        if candidate_reports:
+            candidate_reports.sort(
+                key=lambda item: (
+                    float(item.get("candidate_rank_score", float("-inf"))),
+                    self._score_lowmag_search_candidate(item),
+                ),
+                reverse=True,
+            )
+            best_report["coarse_candidates"] = candidate_reports[:candidate_limit]
+            best_report["candidate_rank_score"] = float(best_report.get("candidate_rank_score", self._numeric_lowmag_search_score(best_report)))
+            if len(candidate_reports) > 1:
+                best_report["candidate_rank_gap"] = float(
+                    candidate_reports[0].get("candidate_rank_score", float("-inf"))
+                    - candidate_reports[1].get("candidate_rank_score", float("-inf"))
+                )
+            else:
+                best_report["candidate_rank_gap"] = float(candidate_reports[0].get("candidate_rank_score", 0.0))
+        else:
+            best_report["coarse_candidates"] = [dict(best_report)]
+            best_report["candidate_rank_score"] = float(self._numeric_lowmag_search_score(best_report))
+            best_report["candidate_rank_gap"] = float(best_report["candidate_rank_score"])
+        trace_path = self._save_lowmag_search_trace(search_trace, best_report=best_report, site_memory=site_memory)
+        self.state.lowmag_guidance_report = best_report
+        self.log(
+            "Low-mag landmark search best match: "
+            f"frames={len(search_trace)}, support={best_report.get('support_count', 0)}, "
+            f"confidence={best_report.get('confidence', 0.0):.3f}, "
+            f"geometry={best_report.get('geometry_confidence', 0.0):.3f}, "
+            f"overview={best_report.get('overview_similarity', 0.0):.3f}, stop={stop_reason}"
+        )
+        self.log(
+            "Low-mag candidate ranking: "
+            f"kept={len(best_report.get('coarse_candidates', []))}, "
+            f"gap={best_report.get('candidate_rank_gap', 0.0):.3f}"
+        )
+        if trace_path is not None:
+            self.log(f"Low-mag search trace saved: {trace_path}")
+        ml_correction = best_report.get("ml_correction")
+        if ml_correction is not None:
+            self.log(
+                "Low-mag ML correction: "
+                f"dX={ml_correction['correction_dx_um']:+.1f} um, "
+                f"dY={ml_correction['correction_dy_um']:+.1f} um, "
+                f"predicted total dX={ml_correction['predicted_dx_um']:+.1f} um, "
+                f"predicted total dY={ml_correction['predicted_dy_um']:+.1f} um"
+            )
+        return best_report
 
     def _start_smooth_move(self, target_x, target_y):
         self.state.smooth_move_active = True
@@ -564,7 +1249,7 @@ class AFMCallbacks:
         self.log("Origin cleared")
 
     def _capture_origin_template(self, abs_x, abs_y):
-        source_view = self.state.current_camera_view if self.state.current_camera_view is not None else self.state.current_fov_raw
+        source_view = self.state.current_matching_view if self.state.current_matching_view is not None else self.state.current_fov_raw
         if source_view is None:
             self.state.origin_template = None
             return
@@ -692,7 +1377,22 @@ class AFMCallbacks:
         self.state.current_fov_raw = fov.copy()
         self.state.current_camera_view, _ = render_camera_recognition_frame(
             fov,
-            camera_resolution=self.state.camera_reference_resolution,
+            camera_resolution=self.state.camera_resolution,
+            outside_mask=outside_mask,
+            focus_model=self.state.get_focus_model(),
+            fov_width_um=self.state.fov_width,
+            fov_height_um=self.state.fov_height,
+            tip_rel_x=self.PROBE_TIP_REL_X,
+            tip_rel_y=self.PROBE_TIP_REL_Y,
+            body_width_um=self.state.probe_body_width_um,
+            tip_width_um=self.state.probe_tip_width_um,
+            tip_total_length_um=self.state.probe_tip_total_length_um,
+            triangular_tip_length_um=self.state.probe_triangular_tip_length_um,
+            visible_body_depth_um=self.state.probe_visible_body_depth_um,
+        )
+        self.state.current_matching_view, _ = render_camera_matching_frame(
+            fov,
+            camera_resolution=self.MATCHING_RESOLUTION,
             outside_mask=outside_mask,
             focus_model=self.state.get_focus_model(),
             fov_width_um=self.state.fov_width,
@@ -744,7 +1444,7 @@ class AFMCallbacks:
         return render_camera_recognition_frame(
             fov,
             camera_resolution=(
-                self.state.camera_reference_resolution
+                self.state.camera_resolution
                 if camera_resolution is None
                 else camera_resolution
             ),
@@ -765,6 +1465,285 @@ class AFMCallbacks:
             visible_body_depth_um=self.state.probe_visible_body_depth_um,
         )[0]
 
+    def _capture_matching_template(
+        self,
+        top_left_x_um,
+        top_left_y_um,
+        fov_width_um,
+        fov_height_um,
+        *,
+        zoom_level=None,
+        disable_blur=False,
+    ):
+        fov, outside_mask, _, _ = create_stage_fov(
+            self.state.surface_image,
+            self.artifact_layer,
+            self.state.show_artifact,
+            top_left_x_um,
+            top_left_y_um,
+            fov_width_um,
+            fov_height_um,
+            valid_mask=self.state.surface_valid_mask,
+        )
+        return render_camera_matching_frame(
+            fov,
+            camera_resolution=self.MATCHING_RESOLUTION,
+            outside_mask=outside_mask,
+            focus_model=(
+                None
+                if disable_blur
+                else self.state.get_focus_model(
+                    zoom_level=zoom_level,
+                    fov_width_um=fov_width_um,
+                    fov_height_um=fov_height_um,
+                )
+            ),
+            fov_width_um=fov_width_um,
+            fov_height_um=fov_height_um,
+            tip_rel_x=self.PROBE_TIP_REL_X,
+            tip_rel_y=self.PROBE_TIP_REL_Y,
+            body_width_um=self.state.probe_body_width_um,
+            tip_width_um=self.state.probe_tip_width_um,
+            tip_total_length_um=self.state.probe_tip_total_length_um,
+            triangular_tip_length_um=self.state.probe_triangular_tip_length_um,
+            visible_body_depth_um=self.state.probe_visible_body_depth_um,
+        )[0]
+
+    def _capture_display_panel_snapshot(self):
+        canvas = getattr(self.fig, "canvas", None)
+        if canvas is None or self.ax is None:
+            return None
+        try:
+            canvas.draw()
+            rgba = np.asarray(canvas.buffer_rgba())
+        except Exception:
+            return None
+        if rgba.size == 0:
+            return None
+        bbox = self.ax.get_window_extent()
+        canvas_h, canvas_w = rgba.shape[:2]
+        x0 = max(0, int(np.floor(bbox.x0)))
+        x1 = min(canvas_w, int(np.ceil(bbox.x1)))
+        y0 = max(0, int(np.floor(canvas_h - bbox.y1)))
+        y1 = min(canvas_h, int(np.ceil(canvas_h - bbox.y0)))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        crop = rgba[y0:y1, x0:x1, :3]
+        if crop.size == 0:
+            return None
+        return cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+
+    def _capture_live_camera_reference_view(
+        self,
+        top_left_x_um,
+        top_left_y_um,
+        fov_width_um,
+        fov_height_um,
+        *,
+        zoom_level=None,
+        camera_resolution=None,
+    ):
+        fov, outside_mask, _, _ = create_stage_fov(
+            self.state.surface_image,
+            self.artifact_layer,
+            self.state.show_artifact,
+            top_left_x_um,
+            top_left_y_um,
+            fov_width_um,
+            fov_height_um,
+            valid_mask=self.state.surface_valid_mask,
+        )
+        display_view, _ = render_camera_frame(
+            fov,
+            camera_resolution=(
+                self.state.camera_resolution
+                if camera_resolution is None
+                else camera_resolution
+            ),
+            outside_mask=outside_mask,
+            focus_model=self.state.get_focus_model(
+                zoom_level=zoom_level,
+                fov_width_um=fov_width_um,
+                fov_height_um=fov_height_um,
+            ),
+        )
+        return to_grayscale_u8(display_view)
+
+    def _score_matching_views(self, reference_view, candidate_view):
+        reference = to_grayscale_u8(reference_view)
+        candidate = to_grayscale_u8(candidate_view)
+        if reference is None or candidate is None or reference.size == 0 or candidate.size == 0:
+            return -1.0
+        if reference.shape[:2] != candidate.shape[:2]:
+            candidate = cv2.resize(candidate, (reference.shape[1], reference.shape[0]), interpolation=cv2.INTER_AREA)
+        ref_f = reference.astype(np.float32)
+        cand_f = candidate.astype(np.float32)
+        ref_norm = cv2.normalize(ref_f, None, 0.0, 1.0, cv2.NORM_MINMAX)
+        cand_norm = cv2.normalize(cand_f, None, 0.0, 1.0, cv2.NORM_MINMAX)
+        ref_std = float(np.std(ref_norm))
+        cand_std = float(np.std(cand_norm))
+        if ref_std < 1e-6 and cand_std < 1e-6:
+            mean_delta = abs(float(np.mean(ref_norm)) - float(np.mean(cand_norm)))
+            return float(np.clip(1.0 - 2.0 * mean_delta, -1.0, 1.0))
+        if ref_std < 1e-6 or cand_std < 1e-6:
+            return -1.0
+        score = float(np.corrcoef(ref_norm.reshape(-1), cand_norm.reshape(-1))[0, 1])
+        if not np.isfinite(score):
+            score = -1.0
+        return score
+
+    def _match_camera_template(self, reference_template, center_x_um, center_y_um, half_range_um):
+        if reference_template is None:
+            return None
+        if self._camera_frame_only_relocation_enabled():
+            current_view = self._get_current_relocation_view(prefer_matching=False)
+            if current_view is None:
+                return None
+            score = self._score_matching_views(reference_template, current_view)
+            return {
+                "x": float(self.state.x),
+                "y": float(self.state.y),
+                "score": float(score),
+                "score_gap": float(max(score, 0.0)),
+                "candidates": [{"x": float(self.state.x), "y": float(self.state.y), "score": float(score)}],
+                "level_candidates": [{"x": float(self.state.x), "y": float(self.state.y), "score": float(score)}],
+            }
+        start_x, start_y = self._clamp_to_stage_margin(center_x_um, center_y_um)
+        current_center_x = float(start_x)
+        current_center_y = float(start_y)
+        base_step = max(20.0, half_range_um / 2.0)
+        step_schedule = [
+            float(base_step),
+            float(max(base_step / 2.0, 10.0)),
+            float(max(base_step / 4.0, 5.0)),
+            float(max(base_step / 8.0, 2.0)),
+        ]
+        best = None
+        all_candidates = {}
+        final_candidates = []
+        for step_um in step_schedule:
+            local_offsets = tuple(float(offset) * float(step_um) for offset in (-2.0, -1.0, 0.0, 1.0, 2.0))
+            level_candidates = []
+            for dy_um in local_offsets:
+                for dx_um in local_offsets:
+                    x_um = current_center_x + float(dx_um)
+                    y_um = current_center_y + float(dy_um)
+                    top_left_x, top_left_y = self._clamp_to_stage_margin(float(x_um), float(y_um))
+                    candidate_view = self._capture_live_camera_reference_view(
+                        top_left_x,
+                        top_left_y,
+                        float(self.state.fov_width),
+                        float(self.state.fov_height),
+                        zoom_level=float(self.state.current_zoom_level),
+                    )
+                    score = self._score_matching_views(reference_template, candidate_view)
+                    level_candidates.append(
+                        {
+                            "x": float(top_left_x),
+                            "y": float(top_left_y),
+                            "score": score,
+                        }
+                    )
+                    candidate_key = (round(float(top_left_x), 3), round(float(top_left_y), 3))
+                    previous = all_candidates.get(candidate_key)
+                    if previous is None or score > previous["score"]:
+                        all_candidates[candidate_key] = {
+                            "x": float(top_left_x),
+                            "y": float(top_left_y),
+                            "score": score,
+                        }
+            if not level_candidates:
+                continue
+            level_candidates.sort(key=lambda item: item["score"], reverse=True)
+            best = level_candidates[0]
+            current_center_x = float(best["x"])
+            current_center_y = float(best["y"])
+            final_candidates = level_candidates[:5]
+
+        if best is None:
+            return None
+        ranked_candidates = sorted(all_candidates.values(), key=lambda item: item["score"], reverse=True)
+        best = dict(ranked_candidates[0])
+        score_gap = float(best["score"] - ranked_candidates[1]["score"]) if len(ranked_candidates) > 1 else float(best["score"])
+        best["score_gap"] = score_gap
+        best["candidates"] = ranked_candidates[:10]
+        best["level_candidates"] = final_candidates
+        return best
+
+    def _select_verified_fine_match(self, fine_match, *, site_memory=None):
+        if fine_match is None:
+            return None, None
+        candidates = [fine_match]
+        for candidate in fine_match.get("candidates", []):
+            if (
+                abs(float(candidate.get("x", 0.0)) - float(fine_match.get("x", 0.0))) < 1e-6
+                and abs(float(candidate.get("y", 0.0)) - float(fine_match.get("y", 0.0))) < 1e-6
+            ):
+                continue
+            candidates.append(candidate)
+
+        best_verification = None
+        for index, candidate in enumerate(candidates[:5], start=1):
+            verification = self._verify_relocation(
+                float(candidate["x"]),
+                float(candidate["y"]),
+                site_memory=site_memory,
+            )
+            if index > 1:
+                self.log(
+                    "Fine candidate re-check "
+                    f"{index}/5: X={float(candidate['x']):.1f} um, "
+                    f"Y={float(candidate['y']):.1f} um, "
+                    f"score={float(candidate['score']):.3f}, "
+                    f"verified={verification.get('verified', False)}"
+                )
+            if best_verification is None or verification.get("reference_score", 0.0) > best_verification.get("reference_score", -1.0):
+                best_verification = verification
+            if verification.get("verified", False):
+                selected = dict(candidate)
+                selected["verification_rank"] = index
+                return selected, verification
+        return fine_match, best_verification
+
+    def _estimate_local_match_gap(self, top_left_x_um, top_left_y_um):
+        reference_template = self.state.ref_template
+        if reference_template is None:
+            return 0.0
+        if self._camera_frame_only_relocation_enabled():
+            current_view = self._get_current_relocation_view(prefer_matching=False)
+            return float(max(self._score_matching_views(reference_template, current_view), 0.0))
+        center_view = self._capture_live_camera_reference_view(
+            float(top_left_x_um),
+            float(top_left_y_um),
+            float(self.state.fov_width),
+            float(self.state.fov_height),
+            zoom_level=float(self.state.current_zoom_level),
+        )
+        center_score = self._score_matching_views(reference_template, center_view)
+        offset_step_x = max(5.0, float(self.state.fov_width) * 0.10)
+        offset_step_y = max(5.0, float(self.state.fov_height) * 0.10)
+        neighbor_scores = []
+        for dx_um, dy_um in (
+            (-offset_step_x, 0.0),
+            (offset_step_x, 0.0),
+            (0.0, -offset_step_y),
+            (0.0, offset_step_y),
+        ):
+            nx, ny = self._clamp_to_stage_margin(
+                float(top_left_x_um) + float(dx_um),
+                float(top_left_y_um) + float(dy_um),
+            )
+            neighbor_view = self._capture_live_camera_reference_view(
+                float(nx),
+                float(ny),
+                float(self.state.fov_width),
+                float(self.state.fov_height),
+                zoom_level=float(self.state.current_zoom_level),
+            )
+            neighbor_scores.append(self._score_matching_views(reference_template, neighbor_view))
+        best_neighbor = max(neighbor_scores) if neighbor_scores else -1.0
+        return float(max(center_score - best_neighbor, 0.0))
+
     def _build_camera_overview(
         self,
         *,
@@ -779,17 +1758,17 @@ class AFMCallbacks:
         max_y = max(float(self.state.height_um) - float(fov_height_um), 0.0)
         top_left_x_um = float(np.clip(center_x_um - float(fov_width_um) * 0.5, 0.0, max_x))
         top_left_y_um = float(np.clip(center_y_um - float(fov_height_um) * 0.5, 0.0, max_y))
-        view = self._capture_recognition_view(
+        disable_blur = bool(
+            getattr(self.state, "reference_lowmag_disable_blur", False)
+            and np.isclose(float(zoom_level), float(min(self.state.zoom_levels)))
+        )
+        view = self._capture_matching_template(
             top_left_x_um,
             top_left_y_um,
             fov_width_um,
             fov_height_um,
             zoom_level=zoom_level,
-            camera_resolution=(
-                self.state.camera_resolution
-                if camera_resolution is None
-                else camera_resolution
-            ),
+            disable_blur=disable_blur,
         )
         if view is None or view.size == 0:
             return None
@@ -810,7 +1789,286 @@ class AFMCallbacks:
         overview["fov_width_um"] = float(fov_width_um)
         overview["fov_height_um"] = float(fov_height_um)
         overview["zoom_level"] = float(zoom_level)
+        overview["render_mode"] = "matching_no_blur" if disable_blur else "matching"
         return overview
+
+    def _capture_reference_lowmag_landmark_map(self):
+        coarse_zoom_level = float(min(self.state.zoom_levels))
+        tip_x_um = float(getattr(self.state, "probe_tip_x", self.state.x + self.state.fov_width / 2.0))
+        tip_y_um = float(getattr(self.state, "probe_tip_y", self.state.y + self.state.fov_height / 2.0))
+        coarse_fov_width_um, coarse_fov_height_um = self.state.get_fov_for_zoom_level(coarse_zoom_level)
+        step_fraction = float(self.state.reference_lowmag_capture_step_fraction)
+        step_x_um = float(coarse_fov_width_um) * step_fraction
+        step_y_um = float(coarse_fov_height_um) * step_fraction
+        capture_positions = [
+            (0.0, 0.0),
+            (-step_x_um, 0.0),
+            (step_x_um, 0.0),
+            (0.0, -step_y_um),
+            (0.0, step_y_um),
+        ][: max(int(self.state.reference_lowmag_capture_positions), 1)]
+
+        overviews = []
+        landmark_sets = []
+        for index, (offset_x_um, offset_y_um) in enumerate(capture_positions, start=1):
+            overview = self._build_camera_overview(
+                zoom_level=coarse_zoom_level,
+                center_x_um=tip_x_um + float(offset_x_um),
+                center_y_um=tip_y_um + float(offset_y_um),
+            )
+            if overview is None:
+                continue
+            landmarks = extract_landmarks(
+                overview["image"],
+                base_x_um=float(overview.get("top_left_x_um", 0.0)),
+                base_y_um=float(overview.get("top_left_y_um", 0.0)),
+                scale_x_um_per_px=overview["scale_x_um_per_px"],
+                scale_y_um_per_px=overview["scale_y_um_per_px"],
+                origin_x_um=float(self.state.origin_x) if getattr(self.state, "origin_defined", False) else None,
+                origin_y_um=float(self.state.origin_y) if getattr(self.state, "origin_defined", False) else None,
+                patch_half=18,
+                max_landmarks=6,
+                min_distance_px=18,
+            )
+            annotate_landmarks_with_tip_geometry(landmarks, tip_x_um=tip_x_um, tip_y_um=tip_y_um)
+            for landmark in landmarks:
+                landmark["capture_frame_index"] = int(index)
+                landmark["capture_offset_x_um"] = float(offset_x_um)
+                landmark["capture_offset_y_um"] = float(offset_y_um)
+            overviews.append(overview)
+            landmark_sets.append(landmarks)
+
+        primary_overview = overviews[0] if overviews else None
+        min_distance_um = max(
+            80.0,
+            float(coarse_fov_width_um) / 6.0,
+            float(coarse_fov_height_um) / 6.0,
+        )
+        merged_landmarks = merge_landmark_sets(
+            landmark_sets,
+            max_landmarks=int(self.state.reference_lowmag_max_landmarks),
+            min_distance_um=min_distance_um,
+        )
+        capture_report = {
+            "frame_count": len(overviews),
+            "raw_landmark_count": int(sum(len(items) for items in landmark_sets)),
+            "merged_landmark_count": int(len(merged_landmarks)),
+            "coarse_zoom_level": coarse_zoom_level,
+            "step_x_um": float(step_x_um),
+            "step_y_um": float(step_y_um),
+        }
+        return primary_overview, merged_landmarks, capture_report
+
+    def _capture_reference_fine_bundle(self):
+        tip_x_um = float(getattr(self.state, "probe_tip_x", self.state.x + self.state.fov_width / 2.0))
+        tip_y_um = float(getattr(self.state, "probe_tip_y", self.state.y + self.state.fov_height / 2.0))
+        target_zoom = max(float(self.state.current_zoom_level), float(self.state.reference_auto_fine_zoom_level))
+        zoom_levels = np.asarray(self.state.zoom_levels, dtype=float)
+        fine_zoom_level = float(zoom_levels[np.argmin(np.abs(zoom_levels - target_zoom))])
+        fine_fov_width_um, fine_fov_height_um = self.state.get_fov_for_zoom_level(fine_zoom_level)
+        max_x = max(float(self.state.width_um) - float(fine_fov_width_um), 0.0)
+        max_y = max(float(self.state.height_um) - float(fine_fov_height_um), 0.0)
+        fine_top_left_x = float(np.clip(tip_x_um - float(fine_fov_width_um) * 0.5, 0.0, max_x))
+        fine_top_left_y = float(np.clip(tip_y_um - float(fine_fov_height_um) * 0.5, 0.0, max_y))
+        fine_reference_template = self._capture_matching_template(
+            fine_top_left_x,
+            fine_top_left_y,
+            fine_fov_width_um,
+            fine_fov_height_um,
+            zoom_level=fine_zoom_level,
+        )
+        fine_live_camera_view = self._capture_live_camera_reference_view(
+            fine_top_left_x,
+            fine_top_left_y,
+            fine_fov_width_um,
+            fine_fov_height_um,
+            zoom_level=fine_zoom_level,
+            camera_resolution=self.state.camera_resolution,
+        )
+        fine_highmag_landmarks = extract_landmarks(
+            fine_reference_template,
+            base_x_um=fine_top_left_x,
+            base_y_um=fine_top_left_y,
+            origin_x_um=float(self.state.origin_x) if getattr(self.state, "origin_defined", False) else None,
+            origin_y_um=float(self.state.origin_y) if getattr(self.state, "origin_defined", False) else None,
+            patch_half=24,
+            max_landmarks=6,
+            min_distance_px=22,
+        )
+        annotate_landmarks_with_tip_geometry(fine_highmag_landmarks, tip_x_um=tip_x_um, tip_y_um=tip_y_um)
+        return {
+            "zoom_level": fine_zoom_level,
+            "top_left_x_um": fine_top_left_x,
+            "top_left_y_um": fine_top_left_y,
+            "reference_template": fine_reference_template,
+            "live_camera_view": fine_live_camera_view,
+            "highmag_landmarks": fine_highmag_landmarks,
+        }
+
+    def _build_lowmag_guidance_report(self, overview, *, site_memory=None):
+        site_memory = self.state.site_memory if site_memory is None else site_memory
+        site_memory = site_memory or {}
+        lowmag_landmarks = site_memory.get("lowmag_landmarks") or []
+        if overview is None or not lowmag_landmarks:
+            self.state.lowmag_guidance_report = None
+            return None
+        consensus = estimate_landmark_consensus(
+            lowmag_landmarks,
+            overview["image"],
+            search_origin_x_um=float(overview.get("top_left_x_um", 0.0)),
+            search_origin_y_um=float(overview.get("top_left_y_um", 0.0)),
+            scale_x_um_per_px=overview["scale_x_um_per_px"],
+            scale_y_um_per_px=overview["scale_y_um_per_px"],
+            min_score=max(0.30, float(self.state.relocation_min_match_score) - 0.10),
+            min_gap=max(0.01, float(self.state.relocation_min_score_gap) - 0.01),
+            max_residual_um=120.0,
+        )
+        if consensus is None:
+            self.state.lowmag_guidance_report = None
+            return None
+
+        tip_x_um = float(self.state.probe_tip_x)
+        tip_y_um = float(self.state.probe_tip_y)
+        matches = []
+        distance_errors = []
+        angle_errors = []
+        dx_errors = []
+        dy_errors = []
+        for match in consensus.get("matches", []):
+            guided_tip_x = None
+            guided_tip_y = None
+            current_tip_dx = None
+            current_tip_dy = None
+            current_tip_distance = None
+            current_tip_angle = None
+            distance_error = None
+            angle_error = None
+            dx_error = None
+            dy_error = None
+            ref_tip_dx = match.get("reference_tip_dx_um")
+            ref_tip_dy = match.get("reference_tip_dy_um")
+            ref_tip_distance = match.get("reference_tip_distance_um")
+            ref_tip_angle = match.get("reference_tip_angle_deg")
+            if ref_tip_dx is not None and ref_tip_dy is not None:
+                guided_tip_x = float(match["abs_x_um"] - float(ref_tip_dx))
+                guided_tip_y = float(match["abs_y_um"] - float(ref_tip_dy))
+                dx_error = float(tip_x_um - guided_tip_x)
+                dy_error = float(tip_y_um - guided_tip_y)
+                dx_errors.append(dx_error)
+                dy_errors.append(dy_error)
+                current_tip_dx = float(match["abs_x_um"] - tip_x_um)
+                current_tip_dy = float(match["abs_y_um"] - tip_y_um)
+                current_tip_distance = float(np.hypot(current_tip_dx, current_tip_dy))
+                current_tip_angle = float(np.degrees(np.arctan2(current_tip_dy, current_tip_dx)))
+                if ref_tip_distance is not None:
+                    distance_error = float(abs(current_tip_distance - float(ref_tip_distance)))
+                    distance_errors.append(distance_error)
+                if ref_tip_angle is not None:
+                    angle_error = float(abs(((current_tip_angle - float(ref_tip_angle) + 180.0) % 360.0) - 180.0))
+                    angle_errors.append(angle_error)
+            enriched = dict(match)
+            enriched["guided_tip_x_um"] = guided_tip_x
+            enriched["guided_tip_y_um"] = guided_tip_y
+            enriched["current_tip_dx_um"] = current_tip_dx
+            enriched["current_tip_dy_um"] = current_tip_dy
+            enriched["current_tip_distance_um"] = current_tip_distance
+            enriched["current_tip_angle_deg"] = current_tip_angle
+            enriched["distance_error_um"] = distance_error
+            enriched["angle_error_deg"] = angle_error
+            enriched["tip_dx_error_um"] = dx_error
+            enriched["tip_dy_error_um"] = dy_error
+            matches.append(enriched)
+
+        report = {
+            "zoom_level": float(overview.get("zoom_level", self.state.current_zoom_level)),
+            "support_count": int(consensus.get("support_count", 0)),
+            "confidence": float(consensus.get("confidence", 0.0)),
+            "mean_score": float(consensus.get("mean_score", 0.0)),
+            "mean_score_gap": float(consensus.get("mean_score_gap", 0.0)),
+            "offset_x_um": float(consensus.get("offset_x_um", 0.0)),
+            "offset_y_um": float(consensus.get("offset_y_um", 0.0)),
+            "tip_x_um": tip_x_um,
+            "tip_y_um": tip_y_um,
+            "matches": matches,
+            "mean_distance_error_um": None if not distance_errors else float(np.mean(distance_errors)),
+            "mean_angle_error_deg": None if not angle_errors else float(np.mean(angle_errors)),
+            "mean_tip_dx_error_um": None if not dx_errors else float(np.mean(dx_errors)),
+            "mean_tip_dy_error_um": None if not dy_errors else float(np.mean(dy_errors)),
+        }
+        guided_tip_xs = [float(item["guided_tip_x_um"]) for item in matches if item.get("guided_tip_x_um") is not None]
+        guided_tip_ys = [float(item["guided_tip_y_um"]) for item in matches if item.get("guided_tip_y_um") is not None]
+        if guided_tip_xs and guided_tip_ys:
+            estimated_tip_x = float(consensus.get("estimated_tip_x_um", np.mean(guided_tip_xs)))
+            estimated_tip_y = float(consensus.get("estimated_tip_y_um", np.mean(guided_tip_ys)))
+            report["estimated_tip_x_um"] = estimated_tip_x
+            report["estimated_tip_y_um"] = estimated_tip_y
+            report["estimated_tip_dx_um"] = float(estimated_tip_x - tip_x_um)
+            report["estimated_tip_dy_um"] = float(estimated_tip_y - tip_y_um)
+            report["estimated_tip_distance_um"] = float(np.hypot(report["estimated_tip_dx_um"], report["estimated_tip_dy_um"]))
+        else:
+            report["estimated_tip_x_um"] = None
+            report["estimated_tip_y_um"] = None
+            report["estimated_tip_dx_um"] = None
+            report["estimated_tip_dy_um"] = None
+            report["estimated_tip_distance_um"] = None
+        geometry_report = analyze_landmark_geometry(
+            lowmag_landmarks,
+            overview["image"],
+            view_origin_x_um=float(overview.get("top_left_x_um", 0.0)),
+            view_origin_y_um=float(overview.get("top_left_y_um", 0.0)),
+            tip_x_um=tip_x_um,
+            tip_y_um=tip_y_um,
+            min_score=max(0.30, float(self.state.relocation_min_match_score) - 0.10),
+            min_gap=max(0.01, float(self.state.relocation_min_score_gap) - 0.01),
+        )
+        report["matched_count"] = int(geometry_report.get("matched_count", 0))
+        report["geometry_confidence"] = float(geometry_report.get("geometry_confidence", 0.0))
+        report["distance_confidence"] = float(geometry_report.get("distance_confidence", 0.0))
+        report["mean_pair_error_um"] = geometry_report.get("mean_pair_error_um")
+        report["geometry_mean_distance_error_um"] = geometry_report.get("mean_distance_error_um")
+        report["geometry_mean_angle_error_deg"] = geometry_report.get("mean_angle_error_deg")
+        if site_memory.get("lowmag_landmark_source") == "manual_authoritative":
+            geometry_matches = list(geometry_report.get("matches", []))
+            if len(geometry_matches) >= 2:
+                src_points = np.asarray(
+                    [
+                        [float(item["reference_tip_dx_um"]), float(item["reference_tip_dy_um"])]
+                        for item in geometry_matches
+                        if item.get("reference_tip_dx_um") is not None and item.get("reference_tip_dy_um") is not None
+                    ],
+                    dtype=np.float32,
+                )
+                dst_points = np.asarray(
+                    [
+                        [float(item["center_x_um"]), float(item["center_y_um"])]
+                        for item in geometry_matches
+                        if item.get("reference_tip_dx_um") is not None and item.get("reference_tip_dy_um") is not None
+                    ],
+                    dtype=np.float32,
+                )
+                if len(src_points) >= 2 and len(dst_points) >= 2:
+                    try:
+                        matrix, _ = cv2.estimateAffinePartial2D(
+                            src_points.reshape(-1, 1, 2),
+                            dst_points.reshape(-1, 1, 2),
+                            method=cv2.LMEDS,
+                        )
+                    except Exception:
+                        matrix = None
+                    if matrix is not None:
+                        predicted_tip_x, predicted_tip_y = transform_point(matrix, 0.0, 0.0)
+                        report["manual_constellation_matrix"] = matrix
+                        report["manual_constellation_match_count"] = int(len(src_points))
+                        report["manual_constellation_confidence"] = float(report["geometry_confidence"])
+                        report["estimated_tip_x_um"] = float(predicted_tip_x)
+                        report["estimated_tip_y_um"] = float(predicted_tip_y)
+                        report["estimated_tip_dx_um"] = float(predicted_tip_x - tip_x_um)
+                        report["estimated_tip_dy_um"] = float(predicted_tip_y - tip_y_um)
+                        report["estimated_tip_distance_um"] = float(
+                            np.hypot(report["estimated_tip_dx_um"], report["estimated_tip_dy_um"])
+                        )
+        self.state.lowmag_guidance_report = report
+        return report
 
     def _clamp_to_stage_margin(self, x, y):
         min_x = -self.state.stage_margin_um
@@ -825,6 +2083,24 @@ class AFMCallbacks:
         if event.inaxes != self.ax or event.xdata is None or event.ydata is None:
             return
         if self.handle_viewport_arrow_click(event):
+            return
+
+        if getattr(self.state, "manual_reference_landmark_mode", False):
+            if getattr(event, "button", None) == 3:
+                self._finish_manual_reference_landmarks()
+                return
+            if getattr(event, "button", None) != 1:
+                return
+            self._record_manual_reference_landmark(float(event.xdata), float(event.ydata))
+            return
+
+        if getattr(self.state, "manual_landmark_guidance_active", False):
+            if getattr(event, "button", None) == 3:
+                self._cancel_manual_landmark_guidance("Human-guided landmark correction cancelled.")
+                return
+            if getattr(event, "button", None) != 1:
+                return
+            self._record_manual_landmark_click(float(event.xdata), float(event.ydata))
             return
 
         # Page 2/3: click-to-move correction mode (AI relocation fallback)
@@ -880,6 +2156,230 @@ class AFMCallbacks:
             f"AOI selected at X={clicked_x:.1f} um, Y={clicked_y:.1f} um -> "
             f"moving cantilever tip by dX={delta_x:+.1f} um, dY={delta_y:+.1f} um"
         )
+
+    def _cancel_manual_landmark_guidance(self, message=None):
+        self.state.manual_landmark_guidance_active = False
+        self.state.manual_landmark_clicked_points = []
+        self.state.manual_landmark_estimate = None
+        if message:
+            self.log(message)
+
+    def begin_manual_reference_landmarks(self, event):
+        current_view = self.state.current_matching_view if self.state.current_matching_view is not None else self.state.current_fov_raw
+        if current_view is None or current_view.size == 0:
+            self.log("No current camera matching view available for manual landmark marking.")
+            return
+        self.state.manual_reference_landmark_mode = True
+        self.state.manual_reference_landmarks = []
+        self.log(
+            "👉 Pre-remount landmark marking: click 2 to 6 trusted landmarks before saving the site.\n"
+            "   These human-selected landmarks will be stored in the site memory.\n"
+            "   Right-click to finish or cancel."
+        )
+        self.fig.canvas.draw_idle()
+
+    def _extract_manual_reference_landmark(self, abs_x_um, abs_y_um):
+        source_view = self.state.current_matching_view if self.state.current_matching_view is not None else self.state.current_fov_raw
+        if source_view is None or source_view.size == 0:
+            return None
+        gray = to_grayscale_u8(source_view)
+        if gray is None or gray.size == 0:
+            return None
+        view_h, view_w = gray.shape[:2]
+        rel_x = (float(abs_x_um) - float(self.state.x)) / max(float(self.state.fov_width), 1e-6)
+        rel_y = (float(abs_y_um) - float(self.state.y)) / max(float(self.state.fov_height), 1e-6)
+        px = int(round(np.clip(rel_x * float(view_w), 0, max(view_w - 1, 0))))
+        py = int(round(np.clip(rel_y * float(view_h), 0, max(view_h - 1, 0))))
+        patch_half = 24
+        x0 = max(0, px - patch_half)
+        x1 = min(view_w, px + patch_half)
+        y0 = max(0, py - patch_half)
+        y1 = min(view_h, py + patch_half)
+        patch = gray[y0:y1, x0:x1]
+        if patch.shape[0] < 12 or patch.shape[1] < 12:
+            return None
+        tip_x = float(getattr(self.state, "probe_tip_x", self.state.x + self.state.fov_width / 2.0))
+        tip_y = float(getattr(self.state, "probe_tip_y", self.state.y + self.state.fov_height / 2.0))
+        dx = float(abs_x_um - tip_x)
+        dy = float(abs_y_um - tip_y)
+        return {
+            "center_px": (int(px), int(py)),
+            "abs_x_um": float(abs_x_um),
+            "abs_y_um": float(abs_y_um),
+            "view_local_x_um": float(abs_x_um - float(self.state.x)),
+            "view_local_y_um": float(abs_y_um - float(self.state.y)),
+            "relative_x_um": None if not self.state.origin_defined else float(abs_x_um - self.state.origin_x),
+            "relative_y_um": None if not self.state.origin_defined else float(abs_y_um - self.state.origin_y),
+            "score": float(np.std(patch.astype(np.float32))),
+            "capture_zoom_level": float(self.state.current_zoom_level),
+            "tip_dx_um": dx,
+            "tip_dy_um": dy,
+            "tip_distance_um": float(np.hypot(dx, dy)),
+            "tip_angle_deg": float(np.degrees(np.arctan2(dy, dx))),
+            "patch": patch.copy(),
+            "manual": True,
+        }
+
+    def _record_manual_reference_landmark(self, abs_x_um, abs_y_um):
+        landmarks = list(getattr(self.state, "manual_reference_landmarks", []))
+        if len(landmarks) >= 6:
+            self.log("Already stored 6 manual reference landmarks. Right-click to finish, or Save Region to keep them.")
+            self.fig.canvas.draw_idle()
+            return
+        landmark = self._extract_manual_reference_landmark(abs_x_um, abs_y_um)
+        if landmark is None:
+            self.log("Selected point is too close to the view edge for a stable landmark patch. Click a more central landmark.")
+            self.fig.canvas.draw_idle()
+            return
+        landmarks.append(landmark)
+        self.state.manual_reference_landmarks = landmarks
+        self.log(
+            f"Stored manual reference landmark {len(landmarks)} at "
+            f"viewport-local ({landmark['view_local_x_um']:.1f}, {landmark['view_local_y_um']:.1f}) um "
+            f"| tip-relative dX={landmark['tip_dx_um']:+.1f} um, dY={landmark['tip_dy_um']:+.1f} um"
+        )
+        self.fig.canvas.draw_idle()
+
+    def _finish_manual_reference_landmarks(self):
+        count = len(getattr(self.state, "manual_reference_landmarks", []))
+        self.state.manual_reference_landmark_mode = False
+        if count == 0:
+            self.log("Manual landmark marking ended with no saved points.")
+        else:
+            self.log(
+                f"Manual landmark marking finished with {count} saved landmarks. "
+                "Now click Save Region to store them into the site memory."
+            )
+        self.fig.canvas.draw_idle()
+
+    def _enter_manual_landmark_guidance(self, target_x=None, target_y=None):
+        site_memory = self.state.site_memory or {}
+        if len(site_memory.get("highmag_landmarks") or []) < 2:
+            self._enter_click_to_move_correction(target_x, target_y)
+            return
+        self.state.manual_landmark_guidance_active = True
+        self.state.manual_landmark_clicked_points = []
+        self.state.manual_landmark_estimate = None
+        self.state.ai_relocate_awaiting_click = False
+        self.state.ai_relocate_pending_target_x = None
+        self.state.ai_relocate_pending_target_y = None
+        self.log(
+            "👉 Human-guided landmark mode: click 2 or 3 recognizable landmarks in the current camera view.\n"
+            "   After two clicks, the system will estimate the saved site pose and guide the viewport.\n"
+            "   Right-click to cancel and fall back to click-to-move."
+        )
+
+    def _estimate_manual_landmark_pose(self):
+        site_memory = self.state.site_memory or {}
+        landmarks = site_memory.get("highmag_landmarks") or []
+        clicked_points = list(getattr(self.state, "manual_landmark_clicked_points", []))
+        if len(landmarks) < 2 or len(clicked_points) < 2:
+            return None
+
+        clicked = np.asarray(clicked_points, dtype=np.float32)
+        best = None
+        for landmark_indexes in itertools.permutations(range(len(landmarks)), len(clicked_points)):
+            saved = np.asarray(
+                [
+                    [float(landmarks[index]["abs_x_um"]), float(landmarks[index]["abs_y_um"])]
+                    for index in landmark_indexes
+                ],
+                dtype=np.float32,
+            )
+            matrix, _ = cv2.estimateAffinePartial2D(
+                saved.reshape(-1, 1, 2),
+                clicked.reshape(-1, 1, 2),
+                method=cv2.LMEDS,
+            )
+            if matrix is None:
+                continue
+            projected = cv2.transform(saved.reshape(1, -1, 2), matrix).reshape(-1, 2)
+            residuals = np.linalg.norm(projected - clicked, axis=1)
+            mean_residual = float(np.mean(residuals))
+            predicted_x, predicted_y = transform_point(matrix, float(self.state.ref_x), float(self.state.ref_y))
+            rotation_deg = float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0])))
+            candidate = {
+                "matrix": matrix,
+                "rotation_deg": rotation_deg,
+                "mean_residual_um": mean_residual,
+                "clicked_count": int(len(clicked_points)),
+                "matched_indexes": list(landmark_indexes),
+                "predicted_x_um": float(predicted_x),
+                "predicted_y_um": float(predicted_y),
+            }
+            if best is None or mean_residual < best["mean_residual_um"]:
+                best = candidate
+        return best
+
+    def _record_manual_landmark_click(self, clicked_x, clicked_y):
+        clicked_points = list(getattr(self.state, "manual_landmark_clicked_points", []))
+        clicked_points.append((float(clicked_x), float(clicked_y)))
+        self.state.manual_landmark_clicked_points = clicked_points
+        self.log(
+            f"Human-guided landmark click {len(clicked_points)} recorded at "
+            f"({clicked_x:.1f}, {clicked_y:.1f})"
+        )
+        if len(clicked_points) < 2:
+            self.log("Click one more landmark to estimate the saved site pose.")
+            return
+
+        estimate = self._estimate_manual_landmark_pose()
+        if estimate is None:
+            self.log("Human-guided landmark estimate failed. Click another landmark or right-click to cancel.")
+            return
+
+        self.state.manual_landmark_estimate = estimate
+        predicted_x, predicted_y = self._clamp_to_stage_margin(
+            estimate["predicted_x_um"],
+            estimate["predicted_y_um"],
+        )
+        self.log(
+            "Human-guided pose estimate: "
+            f"predicted top-left=({predicted_x:.1f}, {predicted_y:.1f}), "
+            f"rotation={estimate['rotation_deg']:+.2f} deg, "
+            f"residual={estimate['mean_residual_um']:.1f} um"
+        )
+
+        fine_match = self._match_camera_template(
+            self.state.ref_template,
+            predicted_x,
+            predicted_y,
+            half_range_um=max(180.0, float(self.state.relocation_verify_half_range_um) * 2.0),
+        )
+        if fine_match is not None:
+            fine_match, verification = self._select_verified_fine_match(
+                fine_match,
+                site_memory=self.state.site_memory,
+            )
+            if verification is None:
+                verification = self._verify_relocation(
+                    float(fine_match["x"]),
+                    float(fine_match["y"]),
+                    site_memory=self.state.site_memory,
+                )
+            if verification.get("verified", False):
+                cmd_x, cmd_y = self._clamp_to_stage_margin(float(fine_match["x"]), float(fine_match["y"]))
+                self._cancel_manual_landmark_guidance()
+                self._start_smooth_move(cmd_x, cmd_y)
+                self.state.sample_removed = False
+                self.log(
+                    "✅ Human-guided landmark recovery accepted: "
+                    f"reference score={verification.get('reference_score', 0.0):.3f}, "
+                    f"gap={verification.get('reference_score_gap', 0.0):.3f}, "
+                    f"moved to ({cmd_x:.1f}, {cmd_y:.1f})"
+                )
+                return
+
+        self._jump_view_to_target(predicted_x, predicted_y)
+        if len(clicked_points) < 3:
+            self.log(
+                "Viewport guided near the predicted site, but automatic verification is not yet strong enough.\n"
+                "Click one more landmark to refine the estimate, or right-click to cancel."
+            )
+            return
+
+        self._cancel_manual_landmark_guidance()
+        self._enter_click_to_move_correction(predicted_x, predicted_y)
 
     def _append_desired_history(self, axis, value):
         history_attr = f"ai_desired_history_{axis}"
@@ -1090,6 +2590,10 @@ class AFMCallbacks:
     def _activate_site_memory(self, site_memory, source_dir=None):
         self.state.site_memory = site_memory
         self.state.ref_template = site_memory.get("reference_template")
+        if self.state.ref_template is None:
+            self.state.ref_template = site_memory.get("live_camera_view")
+        if self.state.ref_template is None:
+            raise ValueError("Saved live camera frame is missing. Relocation now requires the saved panel snapshot.")
         self.state.ref_artefacts = list(site_memory.get("highmag_landmarks", []))
         reference_top_left = site_memory.get("reference_top_left") or {}
         self.state.ref_x = float(reference_top_left.get("x_um", 0.0))
@@ -1108,6 +2612,8 @@ class AFMCallbacks:
             self.state.last_saved_site_dir = str(source_dir)
             if str(source_dir) not in self.state.saved_site_memories:
                 self.state.saved_site_memories.append(str(source_dir))
+        self.log("Saved viewport anchor restored for internal crop bookkeeping only; relocation uses tip-relative camera geometry.")
+        self.log("Fine relocation reference = saved camera matching frame only.")
 
     def _try_load_latest_site_memory(self):
         sample_id = Path(self.state.sample_path).stem if self.state.sample_path else self.state.sample_source
@@ -1346,48 +2852,31 @@ class AFMCallbacks:
         return surface_image[y0:y1, x0:x1], x0, y0
 
     def _verify_relocation(self, top_left_x, top_left_y, surface_image=None, site_memory=None):
-        surface_image = self.state.surface_image if surface_image is None else surface_image
         site_memory = self.state.site_memory if site_memory is None else site_memory
-        template_h, template_w = self.state.ref_template.shape[:2]
-
-        # Pad surface with median color if template is larger than surface
-        sh, sw = surface_image.shape[:2]
-        verify_margin = int(self.state.relocation_verify_half_range_um * 2 + 40)
-        pad_x = max(0, template_w + verify_margin - sw)
-        pad_y = max(0, template_h + verify_margin - sh)
-        if pad_x > 0 or pad_y > 0:
-            fill_val = float(np.median(surface_image))
-            surface_image = cv2.copyMakeBorder(
-                surface_image, 0, pad_y, 0, pad_x,
-                borderType=cv2.BORDER_CONSTANT, value=fill_val,
-            )
-
-        verify_match = match_reference_template(
-            surface_image,
-            self.state.ref_template,
-            top_left_x,
-            top_left_y,
-            half_range=self.state.relocation_verify_half_range_um,
+        candidate_view = self._capture_live_camera_reference_view(
+            float(top_left_x),
+            float(top_left_y),
+            float(self.state.fov_width),
+            float(self.state.fov_height),
+            zoom_level=float(self.state.current_zoom_level),
         )
-        if verify_match is None:
-            verify_match = {
-                "score": 0.0,
-                "score_gap": 0.0,
-                "x": float(top_left_x),
-                "y": float(top_left_y),
-            }
+        verify_score = self._score_matching_views(self.state.ref_template, candidate_view)
+        verify_gap = self._estimate_local_match_gap(float(top_left_x), float(top_left_y))
+        verify_match = {
+            "score": float(max(verify_score, 0.0)),
+            "score_gap": float(max(verify_gap, 0.0)),
+            "x": float(top_left_x),
+            "y": float(top_left_y),
+        }
 
         landmark_consensus = None
         geometry_check = None
         site_memory = site_memory or {}
         if site_memory.get("highmag_landmarks"):
-            crop, crop_x0, crop_y0 = self._extract_surface_crop(
-                top_left_x,
-                top_left_y,
-                self.state.relocation_verify_half_range_um,
-                surface_image=surface_image,
-            )
-            if crop is not None:
+            crop = candidate_view
+            crop_x0 = float(top_left_x)
+            crop_y0 = float(top_left_y)
+            if crop is not None and crop.size > 0:
                 landmark_consensus = estimate_landmark_consensus(
                     site_memory.get("highmag_landmarks", []),
                     crop,
@@ -1397,18 +2886,15 @@ class AFMCallbacks:
                     min_gap=self.state.relocation_min_score_gap,
                     max_residual_um=50.0,
                 )
-                reference_top_left = site_memory.get("reference_top_left") or {}
-                reference_tip = site_memory.get("reference_tip") or {}
+                reference_tip_local = site_memory.get("reference_tip_local") or {}
                 tip_x_um = None
                 tip_y_um = None
                 if (
-                    reference_top_left.get("x_um") is not None
-                    and reference_top_left.get("y_um") is not None
-                    and reference_tip.get("x_um") is not None
-                    and reference_tip.get("y_um") is not None
+                    reference_tip_local.get("x_um") is not None
+                    and reference_tip_local.get("y_um") is not None
                 ):
-                    tip_x_um = float(crop_x0 + (float(reference_tip["x_um"]) - float(reference_top_left["x_um"])))
-                    tip_y_um = float(crop_y0 + (float(reference_tip["y_um"]) - float(reference_top_left["y_um"])))
+                    tip_x_um = float(crop_x0 + float(reference_tip_local["x_um"]))
+                    tip_y_um = float(crop_y0 + float(reference_tip_local["y_um"]))
                 geometry_check = analyze_landmark_geometry(
                     site_memory.get("highmag_landmarks", []),
                     crop,
@@ -1438,14 +2924,10 @@ class AFMCallbacks:
                 and geometry_check.get("geometry_confidence", 0.0) >= self.state.relocation_min_match_score
             )
         )
-        sample_h, sample_w = surface_image.shape[:2]
-        x0 = int(np.clip(round(verify_match["x"]), 0, max(sample_w - template_w, 0)))
-        y0 = int(np.clip(round(verify_match["y"]), 0, max(sample_h - template_h, 0)))
-        candidate_patch = surface_image[y0 : y0 + template_h, x0 : x0 + template_w]
         same_site_probability = score_same_site_probability(
             self.same_site_classifier,
             self.state.ref_template,
-            candidate_patch,
+            candidate_view,
         )
         strong_match_override = False
         strong_match_reason = None
@@ -1472,8 +2954,16 @@ class AFMCallbacks:
             or same_site_probability >= 0.50
             or strong_match_override
         )
+        camera_only_template_override = (
+            self._camera_frame_only_relocation_enabled()
+            and verify_match["score"] >= 0.95
+            and verify_match.get("score_gap", 0.0) >= max(self.state.relocation_min_score_gap, 0.20)
+        )
         return {
-            "verified": bool(match_ok and landmark_ok and geometry_ok and same_site_ok),
+            "verified": bool(
+                camera_only_template_override
+                or (match_ok and landmark_ok and geometry_ok and same_site_ok)
+            ),
             "reference_score": float(verify_match["score"]),
             "reference_score_gap": float(verify_match.get("score_gap", 0.0)),
             "reference_match_x_um": float(verify_match["x"]),
@@ -1483,6 +2973,7 @@ class AFMCallbacks:
             "geometry_check": geometry_check,
             "same_site_probability": same_site_probability,
             "same_site_override_used": bool(strong_match_override),
+            "camera_only_template_override_used": bool(camera_only_template_override),
             "same_site_override_reason": strong_match_reason,
         }
 
@@ -1543,6 +3034,28 @@ class AFMCallbacks:
             self.state.target_x = new_target_x
             self.state.target_y = new_target_y
         self.log(f"Move right {self.state.current_step} um -> target center X={new_target_x + self.state.fov_width / 2.0:.1f}")
+
+    def random_offset_move(self, event):
+        if self.state.zooming:
+            self.log("Wait for zoom to finish before applying a random cantilever move.")
+            return
+        self.state.auto_scan_active = False
+        base_x = float(self.state.target_x)
+        base_y = float(self.state.target_y)
+        requested_dx = float(random.uniform(-200.0, 200.0))
+        requested_dy = float(random.uniform(-200.0, 200.0))
+        new_target_x, new_target_y = self._clamp_to_stage_margin(base_x + requested_dx, base_y + requested_dy)
+        actual_dx = float(new_target_x - base_x)
+        actual_dy = float(new_target_y - base_y)
+        if self.state.pi_mode:
+            self._start_smooth_move(new_target_x, new_target_y)
+        else:
+            self.state.target_x = new_target_x
+            self.state.target_y = new_target_y
+        self.log(
+            f"Random cantilever move: dX={actual_dx:+.1f} um, dY={actual_dy:+.1f} um "
+            "(range +/-200 um)"
+        )
 
     def toggle_pause(self, event):
         self.state.paused = not self.state.paused
@@ -1841,30 +3354,142 @@ class AFMCallbacks:
                 self.log("Cannot get current image")
                 return
 
-            fov = self.state.current_camera_view if self.state.current_camera_view is not None else self.state.current_fov_raw
-            if fov is None:
-                fov = self.img.get_array()
-            self.state.ref_template = fov.copy()
+            live_camera_view = self._capture_display_panel_snapshot()
+            if live_camera_view is None:
+                live_camera_view = self.state.current_camera_view if self.state.current_camera_view is not None else self.state.current_fov_raw
+            if live_camera_view is None:
+                live_camera_view = self.img.get_array()
+            reference_template = (
+                self.state.current_matching_view
+                if self.state.current_matching_view is not None
+                else self._capture_matching_template(
+                    float(self.state.x),
+                    float(self.state.y),
+                    float(self.state.fov_width),
+                    float(self.state.fov_height),
+                    zoom_level=float(self.state.current_zoom_level),
+                )
+            )
+            if live_camera_view is None:
+                self.log("Cannot save reference: live panel snapshot is unavailable.")
+                return
+            fine_bundle = self._capture_reference_fine_bundle()
+            effective_reference_template = fine_bundle.get("reference_template")
+            if effective_reference_template is None:
+                effective_reference_template = reference_template
+            effective_live_camera_view = fine_bundle.get("live_camera_view")
+            if effective_live_camera_view is None:
+                effective_live_camera_view = live_camera_view
+            effective_highmag_landmarks = list(fine_bundle.get("highmag_landmarks") or [])
+            self.state.ref_template = (
+                effective_reference_template.copy()
+                if effective_reference_template is not None
+                else effective_live_camera_view.copy()
+            )
             self.state.ref_artefacts = []
-            self.state.ref_x = self.state.x
-            self.state.ref_y = self.state.y
+            self.state.ref_x = float(fine_bundle.get("top_left_x_um", self.state.x))
+            self.state.ref_y = float(fine_bundle.get("top_left_y_um", self.state.y))
             self.state.ai_desired_history_x = [self.state.x, self.state.x]
             self.state.ai_desired_history_y = [self.state.y, self.state.y]
-            coarse_zoom_level = float(min(self.state.zoom_levels))
-            overview = self._build_camera_overview(
-                zoom_level=coarse_zoom_level,
-                center_x_um=float(self.state.probe_tip_x),
-                center_y_um=float(self.state.probe_tip_y),
-            )
+            overview, captured_lowmag_landmarks, lowmag_capture_report = self._capture_reference_lowmag_landmark_map()
             self.state.site_memory = build_site_memory(
                 self.state,
                 stage_history=self.stage.history_cmd,
                 overview=overview,
+                live_camera_view=effective_live_camera_view,
+                reference_template=effective_reference_template,
+                lowmag_landmarks=captured_lowmag_landmarks,
+                highmag_landmarks=effective_highmag_landmarks,
+                reference_top_left_override=(
+                    float(fine_bundle.get("top_left_x_um", self.state.x)),
+                    float(fine_bundle.get("top_left_y_um", self.state.y)),
+                ),
+                reference_zoom_level_override=float(fine_bundle.get("zoom_level", self.state.current_zoom_level)),
             )
+            self.state.site_memory["reference_view_kind"] = "fine_live_camera_frame"
+            self.state.site_memory["reference_view_zoom_level"] = float(
+                fine_bundle.get("zoom_level", self.state.current_zoom_level)
+            )
+            manual_landmarks = list(getattr(self.state, "manual_reference_landmarks", []))
+            coarse_zoom_level = float(min(self.state.zoom_levels))
+            manual_lowmag_landmarks = [
+                dict(item)
+                for item in manual_landmarks
+                if np.isclose(float(item.get("capture_zoom_level", self.state.current_zoom_level)), coarse_zoom_level)
+            ]
+            manual_highmag_landmarks = [
+                dict(item)
+                for item in manual_landmarks
+                if not np.isclose(float(item.get("capture_zoom_level", self.state.current_zoom_level)), coarse_zoom_level)
+            ]
+            if manual_lowmag_landmarks:
+                authoritative_lowmag = [dict(item) for item in manual_lowmag_landmarks]
+                auto_lowmag = list(self.state.site_memory.get("lowmag_landmarks", []))
+                min_lowmag_landmarks = int(
+                    self.state.site_memory.get("lowmag_ready_min_landmarks", self.state.reference_lowmag_min_landmarks)
+                )
+                if len(authoritative_lowmag) < min_lowmag_landmarks:
+                    merged_lowmag = merge_landmark_sets(
+                        [
+                            authoritative_lowmag,
+                            auto_lowmag,
+                        ],
+                        max_landmarks=int(self.state.reference_lowmag_max_landmarks),
+                        min_distance_um=max(80.0, float(self.state.get_fov_for_zoom_level(coarse_zoom_level)[0]) / 6.0),
+                    )
+                else:
+                    merged_lowmag = authoritative_lowmag
+                self.state.site_memory["lowmag_landmarks"] = merged_lowmag
+                self.state.site_memory["lowmag_landmark_source"] = "manual_authoritative"
+                self.state.site_memory["manual_lowmag_landmark_count"] = int(len(authoritative_lowmag))
+                min_lowmag_landmarks = int(self.state.site_memory.get("lowmag_ready_min_landmarks", self.state.reference_lowmag_min_landmarks))
+                self.state.site_memory["lowmag_ready"] = bool(
+                    self.state.site_memory.get("overview") is not None
+                    and len(merged_lowmag) >= min_lowmag_landmarks
+                )
+                self.log(
+                    f"Using {len(manual_lowmag_landmarks)} manually marked low-mag landmarks from {coarse_zoom_level:.2f}x "
+                    f"as the authoritative coarse landmark set."
+                )
+            if manual_highmag_landmarks:
+                self.state.site_memory["highmag_landmarks"] = manual_highmag_landmarks
+                self.log(
+                    f"Using {len(manual_highmag_landmarks)} human-marked high-mag landmarks for this saved site memory."
+                )
+            self.log("Saved display snapshot from current panel buffer.")
+            self.log("Fine relocation reference = saved camera matching frame only.")
+            self.log(
+                "Auto fine capture: "
+                f"{fine_bundle.get('zoom_level', self.state.current_zoom_level):.2f}x at "
+                f"X={float(fine_bundle.get('top_left_x_um', self.state.x)):.1f} um, "
+                f"Y={float(fine_bundle.get('top_left_y_um', self.state.y)):.1f} um"
+            )
+            self.log(
+                f"Saved low-mag landmark map with "
+                f"{len(self.state.site_memory.get('lowmag_landmarks', []))} tip-referenced landmarks."
+            )
+            if lowmag_capture_report is not None:
+                self.log(
+                    "Low-mag capture sweep: "
+                    f"frames={lowmag_capture_report['frame_count']}, "
+                    f"raw landmarks={lowmag_capture_report['raw_landmark_count']}, "
+                    f"merged={lowmag_capture_report['merged_landmark_count']}, "
+                    f"step=({lowmag_capture_report['step_x_um']:.1f}, {lowmag_capture_report['step_y_um']:.1f}) um"
+                )
+            lowmag_count = len(self.state.site_memory.get("lowmag_landmarks", []))
+            if lowmag_count < int(self.state.reference_lowmag_min_landmarks):
+                self.log(
+                    "Warning: this saved site memory is not ready for reliable automatic low-mag relocation. "
+                    f"Only {lowmag_count} low-mag landmarks were captured; target is at least "
+                    f"{int(self.state.reference_lowmag_min_landmarks)}."
+                )
+                self.log(
+                    f"Zoom to {coarse_zoom_level:.2f}x and use 'Mark Reference Landmarks', or move to a richer surrounding area before saving again."
+                )
             self.state.ref_artefacts = list(self.state.site_memory.get("highmag_landmarks", []))
             output_dir = self._persist_site_memory(self.state.site_memory)
             self.log(f"Reference position saved: ({self.state.ref_x:.1f}, {self.state.ref_y:.1f})")
-            self.log(f"Saved reference template size: {self.state.ref_template.shape[1]} x {self.state.ref_template.shape[0]} px")
+            self.log(f"Saved live camera frame size: {self.state.ref_template.shape[1]} x {self.state.ref_template.shape[0]} px")
             self.log(
                 "Structured site memory saved with "
                 f"{len(self.state.site_memory.get('lowmag_landmarks', []))} low-mag landmarks and "
@@ -1882,7 +3507,7 @@ class AFMCallbacks:
 
     def research_patterns(self, event):
         site_memory = self.state.site_memory or {}
-        current_view = self.state.current_camera_view if self.state.current_camera_view is not None else self.state.current_fov_raw
+        current_view = self.state.current_matching_view if self.state.current_matching_view is not None else self.state.current_fov_raw
         if not site_memory.get("highmag_landmarks"):
             self.log("No saved site memory landmarks available. Save site memory first.")
             return
@@ -1940,6 +3565,9 @@ class AFMCallbacks:
         if not self._begin_action("relocate", "Relocation is already running"):
             return
         try:
+            if self._camera_frame_only_relocation_enabled():
+                self._relocate_using_current_camera_frame("Relocation")
+                return
             if self.state.site_memory is None:
                 self._try_load_latest_site_memory()
             if self.state.site_memory is not None and self.state.ref_template is None:
@@ -2087,17 +3715,7 @@ class AFMCallbacks:
                     center_y_um=float(self.state.probe_tip_y),
                 )
                 if overview is not None:
-                    coarse_result = estimate_landmark_consensus(
-                        site_memory.get("lowmag_landmarks", []),
-                        overview["image"],
-                        search_origin_x_um=float(overview.get("top_left_x_um", 0.0)),
-                        search_origin_y_um=float(overview.get("top_left_y_um", 0.0)),
-                        scale_x_um_per_px=overview["scale_x_um_per_px"],
-                        scale_y_um_per_px=overview["scale_y_um_per_px"],
-                        min_score=self.state.relocation_min_match_score,
-                        min_gap=self.state.relocation_min_score_gap,
-                        max_residual_um=120.0,
-                    )
+                    coarse_result = self._build_lowmag_guidance_report(overview, site_memory=site_memory)
                 if coarse_result is not None and coarse_result["support_count"] >= self.state.relocation_min_landmark_support:
                     coarse_target_x = float(self.state.ref_x + coarse_result["offset_x_um"])
                     coarse_target_y = float(self.state.ref_y + coarse_result["offset_y_um"])
@@ -2111,29 +3729,11 @@ class AFMCallbacks:
                         f"confidence={coarse_result['confidence']:.3f}"
                     )
                 else:
+                    self.state.lowmag_guidance_report = None
                     self.log("Coarse low-mag localization was ambiguous; falling back to the last known reference region.")
 
-            desired_x = float(fine_search_target_x)
-            desired_y = float(fine_search_target_y)
-            # If the reference template is larger than the search surface
-            # (can happen after remount cropping), pad the surface instead of
-            # scaling the template — this preserves coordinate accuracy.
-            template_h, template_w = self.state.ref_template.shape[:2]
-            surface_h, surface_w = fine_search_surface.shape[:2]
-            max_range = self.state.relocation_fine_half_range_um * 4.0
-            pad_x = int(max(0, template_w + 2 * max_range + 40 - surface_w))
-            pad_y = int(max(0, template_h + 2 * max_range + 40 - surface_h))
-            if pad_x > 0 or pad_y > 0:
-                fill_val = float(np.median(fine_search_surface))
-                fine_search_surface = cv2.copyMakeBorder(
-                    fine_search_surface, 0, pad_y, 0, pad_x,
-                    borderType=cv2.BORDER_CONSTANT, value=fill_val,
-                )
-                self.log(
-                    f"Padded search surface by (+{pad_x}, +{pad_y}) px "
-                    f"to fit {template_w}x{template_h} template"
-                )
-            fine_match = None
+            desired_x = float(coarse_target_x)
+            desired_y = float(coarse_target_y)
             search_half_range = self.state.relocation_fine_half_range_um
             max_search_half_range = self.state.relocation_fine_half_range_um * 4.0
             self.log(
@@ -2141,31 +3741,23 @@ class AFMCallbacks:
                 f"half_range={search_half_range:.0f} um"
             )
             while True:
-                for iteration in range(int(self.state.relocation_max_iterations)):
-                    fine_match = match_reference_template(
-                        fine_search_surface,
-                        self.state.ref_template,
-                        desired_x,
-                        desired_y,
-                        half_range=search_half_range,
-                    )
-                    if fine_match is not None:
-                        desired_x = float(fine_match["x"])
-                        desired_y = float(fine_match["y"])
-                        self.log(
-                            f"Fine relocation pass {iteration + 1}: "
-                            f"X={desired_x:.1f} um, Y={desired_y:.1f} um, "
-                            f"score={fine_match['score']:.3f}, gap={fine_match.get('score_gap', 0.0):.3f}"
-                        )
-                        break
+                fine_match = self._match_camera_template(
+                    self.state.ref_template,
+                    desired_x,
+                    desired_y,
+                    half_range_um=search_half_range,
+                )
                 if fine_match is not None:
-                    if (
-                        fine_match is not None
-                        and fine_match["score"] >= self.state.relocation_min_match_score
-                        and fine_match.get("score_gap", 0.0) >= self.state.relocation_min_score_gap
-                    ):
+                    desired_x = float(fine_match["x"])
+                    desired_y = float(fine_match["y"])
+                    self.log(
+                        f"Fine relocation pass: "
+                        f"X={desired_x:.1f} um, Y={desired_y:.1f} um, "
+                        f"score={fine_match['score']:.3f}, gap={fine_match.get('score_gap', 0.0):.3f}"
+                    )
+                    if fine_match["score"] >= self.state.relocation_min_match_score:
                         break
-                    self.log("Fine match found but quality insufficient; expanding range")
+                    self.log("Fine match score still weak; expanding range")
                     fine_match = None
                 search_half_range *= 2.0
                 if search_half_range > max_search_half_range:
@@ -2192,12 +3784,14 @@ class AFMCallbacks:
                 desired_current_x = desired_x
                 desired_current_y = desired_y
 
-            verification = self._verify_relocation(
-                desired_x,
-                desired_y,
-                surface_image=fine_search_surface,
+            fine_match, verification = self._select_verified_fine_match(
+                fine_match,
                 site_memory=site_memory,
             )
+            desired_x = float(fine_match["x"])
+            desired_y = float(fine_match["y"])
+            if verification is None:
+                verification = self._verify_relocation(desired_x, desired_y, site_memory=site_memory)
             self.state.last_relocation_report = {
                 "affine": affine_report,
                 "coarse": coarse_result,
@@ -2240,6 +3834,7 @@ class AFMCallbacks:
                     self.log(
                         f"Phase 2 same-site probability: {verification['same_site_probability']:.3f}"
                     )
+                self._enter_manual_landmark_guidance(desired_current_x, desired_current_y)
                 return
 
             if self.ai_compensator is not None and self.ai_mode:
@@ -2381,6 +3976,9 @@ class AFMCallbacks:
         if not self._begin_action("ai_recall", "AI recall is already running"):
             return
         try:
+            if self._camera_frame_only_relocation_enabled():
+                self._relocate_using_current_camera_frame("AI Recall & Recover")
+                return
             self.log("===== AI Recall & Recover =====")
             if self.state.site_memory is None:
                 self._try_load_latest_site_memory()
@@ -2415,9 +4013,10 @@ class AFMCallbacks:
                     f"confidence={affine_report['confidence']:.3f}"
                 )
             else:
+                affine_confidence = "N/A" if affine_report is None else f"{affine_report['confidence']:.3f}"
                 self.log(
                     "Low-mag pattern recognition confidence low "
-                    f"({affine_report['confidence']:.3f if affine_report else 'N/A'}), "
+                    f"({affine_confidence}), "
                     "proceeding with landmark-only fallback."
                 )
 
@@ -2428,6 +4027,7 @@ class AFMCallbacks:
             fine_search_target_x = float(self.state.x)
             fine_search_target_y = float(self.state.y)
             fine_to_current_matrix = None
+            coarse_strategy = "saved coarse reference"
 
             if coarse_reference_top_left:
                 coarse_target_x = float(coarse_reference_top_left.get("x_um", coarse_target_x))
@@ -2438,6 +4038,7 @@ class AFMCallbacks:
 
             if affine_report is not None and affine_report["confidence"] >= self.state.relocation_min_affine_confidence:
                 fine_to_current_matrix = affine_report["full_matrix"]
+                coarse_strategy = "low-mag camera NCC"
                 fine_search_surface = apply_affine(
                     self.state.surface_image,
                     invert_affine(fine_to_current_matrix),
@@ -2456,22 +4057,22 @@ class AFMCallbacks:
                     center_y_um=float(self.state.probe_tip_y),
                 )
                 if overview is not None:
-                    coarse_result = estimate_landmark_consensus(
-                        site_memory.get("lowmag_landmarks", []),
-                        overview["image"],
-                        search_origin_x_um=float(overview.get("top_left_x_um", 0.0)),
-                        search_origin_y_um=float(overview.get("top_left_y_um", 0.0)),
-                        scale_x_um_per_px=overview["scale_x_um_per_px"],
-                        scale_y_um_per_px=overview["scale_y_um_per_px"],
-                        min_score=max(0.30, float(self.state.relocation_min_match_score) - 0.12),
-                        min_gap=max(0.01, float(self.state.relocation_min_score_gap) - 0.01),
-                        max_residual_um=100.0,
-                    )
+                    coarse_result = self._build_lowmag_guidance_report(overview, site_memory=site_memory)
                     if coarse_result is not None:
+                        coarse_strategy = "low-mag landmark consensus"
                         coarse_target_x = float(coarse_result["offset_x_um"] + coarse_target_x)
                         coarse_target_y = float(coarse_result["offset_y_um"] + coarse_target_y)
                         fine_search_target_x = float(coarse_result["offset_x_um"] + self.state.ref_x)
                         fine_search_target_y = float(coarse_result["offset_y_um"] + self.state.ref_y)
+                        self.log(
+                            "Low-mag landmark fallback: "
+                            f"dX={coarse_result['offset_x_um']:+.1f} um, "
+                            f"dY={coarse_result['offset_y_um']:+.1f} um, "
+                            f"support={coarse_result['support_count']}, "
+                            f"confidence={coarse_result['confidence']:.3f}"
+                        )
+                    else:
+                        self.state.lowmag_guidance_report = None
 
             ml_remount = None
             if fine_to_current_matrix is None and coarse_result is None:
@@ -2488,6 +4089,7 @@ class AFMCallbacks:
                         scale_y_um_per_px=cur_overview.get("scale_y_um_per_px", 1.0),
                     )
                     if ml_remount is not None:
+                        coarse_strategy = "ML remount prediction"
                         coarse_target_x = float(coarse_target_x + ml_remount["dx_um"])
                         coarse_target_y = float(coarse_target_y + ml_remount["dy_um"])
                         fine_search_target_x = float(self.state.ref_x + ml_remount["dx_um"])
@@ -2501,11 +4103,27 @@ class AFMCallbacks:
                 else:
                     ml_remount = None
 
+            if fine_to_current_matrix is None and coarse_result is None and ml_remount is None:
+                self.log(
+                    "No coarse low-mag match was confirmed. "
+                    "Falling back to the saved coarse region and widening high-mag refinement there."
+                )
+
             coarse_cmd_x, coarse_cmd_y = self._clamp_to_stage_margin(coarse_target_x, coarse_target_y)
             self._jump_view_to_target(coarse_cmd_x, coarse_cmd_y)
+            if fine_to_current_matrix is None and coarse_result is None and ml_remount is None:
+                fine_search_target_x = float(coarse_cmd_x)
+                fine_search_target_y = float(coarse_cmd_y)
+            if site_memory.get("lowmag_landmarks"):
+                refreshed_overview = self._build_camera_overview(
+                    zoom_level=coarse_zoom,
+                    center_x_um=float(self.state.probe_tip_x),
+                    center_y_um=float(self.state.probe_tip_y),
+                )
+                self._build_lowmag_guidance_report(refreshed_overview, site_memory=site_memory)
             self.log(
                 f"Stage 2/3: low-mag recall positioned viewport near the saved region at "
-                f"({coarse_cmd_x:.1f}, {coarse_cmd_y:.1f})"
+                f"({coarse_cmd_x:.1f}, {coarse_cmd_y:.1f}) using {coarse_strategy}"
             )
 
             if not np.isclose(float(self.state.current_zoom_level), final_zoom):
@@ -2516,12 +4134,11 @@ class AFMCallbacks:
                 self.log(f"Stage 3/3: already at saved final zoom {final_zoom:.2f}x")
 
             self.log("Running high-magnification refinement...")
+            if fine_to_current_matrix is None and coarse_result is None and ml_remount is None:
+                fine_search_target_x = float(self.state.x)
+                fine_search_target_y = float(self.state.y)
 
-            ml_match_result = self._ml_recognize_pattern(
-                fine_search_surface, self.state.ref_template,
-                center_x=fine_search_target_x, center_y=fine_search_target_y,
-                half_range_um=self.state.relocation_fine_half_range_um * 2,
-            )
+            ml_match_result = None
             if ml_remount is None:
                 cur_overview = self._build_camera_overview(
                     zoom_level=coarse_zoom,
@@ -2555,11 +4172,32 @@ class AFMCallbacks:
                         f"dTheta={ml_remount['dtheta_deg']:+.2f} deg"
                     )
             else:
-                fine_match = match_reference_template(
-                    fine_search_surface, self.state.ref_template,
-                    fine_search_target_x, fine_search_target_y,
-                    half_range=self.state.relocation_fine_half_range_um,
-                )
+                search_half_range = float(self.state.relocation_fine_half_range_um)
+                max_search_half_range = float(self.state.relocation_fine_half_range_um) * 4.0
+                search_center_x = float(coarse_cmd_x)
+                search_center_y = float(coarse_cmd_y)
+                while search_half_range <= max_search_half_range:
+                    fine_match = self._match_camera_template(
+                        self.state.ref_template,
+                        search_center_x,
+                        search_center_y,
+                        half_range_um=search_half_range,
+                    )
+                    if fine_match is not None:
+                        if search_half_range > float(self.state.relocation_fine_half_range_um):
+                            self.log(
+                                "Expanded high-mag search recovered a candidate: "
+                                f"half_range={search_half_range:.0f} um, "
+                                f"score={fine_match['score']:.3f}, "
+                                f"gap={fine_match.get('score_gap', 0.0):.3f}"
+                            )
+                        break
+                    search_half_range *= 2.0
+                    if search_half_range <= max_search_half_range:
+                        self.log(
+                            "High-mag template not found yet; expanding search window to "
+                            f"{search_half_range:.0f} um half-range"
+                        )
 
             if fine_match is None and fine_to_current_matrix is not None:
                 self.log("De-rotated surface search failed, trying on original surface ...")
@@ -2584,19 +4222,18 @@ class AFMCallbacks:
 
             if fine_match is None:
                 self.log("AI relocation could not produce a usable reference match.")
-                self._enter_click_to_move_correction()
+                self._enter_manual_landmark_guidance()
                 return
 
             desired_x = float(fine_match["x"])
             desired_y = float(fine_match["y"])
 
             for iteration in range(int(self.state.relocation_max_iterations)):
-                fine_match = match_reference_template(
-                    fine_search_surface,
+                fine_match = self._match_camera_template(
                     self.state.ref_template,
                     desired_x,
                     desired_y,
-                    half_range=self.state.relocation_fine_half_range_um,
+                    half_range_um=self.state.relocation_fine_half_range_um,
                 )
                 if fine_match is not None:
                     desired_x = float(fine_match["x"])
@@ -2617,20 +4254,23 @@ class AFMCallbacks:
                 desired_current_x = desired_x
                 desired_current_y = desired_y
 
-            verification = self._verify_relocation(
-                desired_x, desired_y,
-                surface_image=fine_search_surface,
+            fine_match, verification = self._select_verified_fine_match(
+                fine_match,
                 site_memory=site_memory,
             )
+            desired_x = float(fine_match["x"])
+            desired_y = float(fine_match["y"])
+            if verification is None:
+                verification = self._verify_relocation(desired_x, desired_y, site_memory=site_memory)
             ml_verified, ml_prob = self._ml_verify_same_site(
                 self.state.ref_template,
-                fine_search_surface[
-                    int(desired_y) : int(desired_y) + self.state.ref_template.shape[0],
-                    int(desired_x) : int(desired_x) + self.state.ref_template.shape[1],
-                ] if (
-                    0 <= int(desired_y) < fine_search_surface.shape[0] - self.state.ref_template.shape[0]
-                    and 0 <= int(desired_x) < fine_search_surface.shape[1] - self.state.ref_template.shape[1]
-                ) else fine_search_surface,
+                self._capture_matching_template(
+                    desired_x,
+                    desired_y,
+                    float(self.state.fov_width),
+                    float(self.state.fov_height),
+                    zoom_level=float(self.state.current_zoom_level),
+                ),
             )
             if ml_prob is not None:
                 verification["ml_same_site_probability"] = ml_prob
@@ -2678,7 +4318,7 @@ class AFMCallbacks:
                         f"matched={geometry_check.get('matched_count', 0)}, "
                         f"confidence={geometry_check.get('geometry_confidence', 0.0):.3f}"
                     )
-                self._enter_click_to_move_correction(desired_current_x, desired_current_y)
+                self._enter_manual_landmark_guidance(desired_current_x, desired_current_y)
         finally:
             self._end_action("ai_recall")
 
@@ -2709,6 +4349,9 @@ class AFMCallbacks:
         if not self._begin_action("ai_zoom", "AI zoom recovery is already running"):
             return
         try:
+            if self._camera_frame_only_relocation_enabled():
+                self._relocate_using_current_camera_frame("AI Zoom & Recover")
+                return
             self.log("===== AI Zoom & Recover =====")
             # 1. Machine recall the last zoom value
             if self.state.site_memory is None:
@@ -2752,7 +4395,7 @@ class AFMCallbacks:
         Uses ML first, falls back to CV.
         Returns (target_x_um, target_y_um, confidence) or None."""
         site_memory = self.state.site_memory or {}
-        current_view = self.state.current_camera_view if self.state.current_camera_view is not None else self.state.current_fov_raw
+        current_view = self.state.current_matching_view if self.state.current_matching_view is not None else self.state.current_fov_raw
         if current_view is None or current_view.size == 0:
             return None
 

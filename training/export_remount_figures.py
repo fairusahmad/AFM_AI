@@ -13,9 +13,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from afm_phase2_ml import _load_site_memories
+from afm_phase2_ml import _load_site_memories, preferred_training_view
 from afm_relocation import load_site_memory, to_grayscale_u8
 from training.train_remount_real import collect_real_pairs, compute_ground_truth
+
+
+plt.rcParams.update(
+    {
+        "font.size": 10,
+        "axes.titlesize": 12,
+        "axes.labelsize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "legend.fontsize": 9,
+    }
+)
 
 
 def resolve_project_path(path_str):
@@ -35,6 +47,28 @@ def save_figure(fig, output_base, dpi=300):
     fig.savefig(output_base.with_suffix(".svg"), bbox_inches="tight")
 
 
+def style_axis(ax):
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.8)
+
+
+def annotate_bar_values(ax, bars, fmt="{:.0f}"):
+    ymax = 0.0
+    for bar in bars:
+        ymax = max(ymax, float(bar.get_height()))
+    for bar in bars:
+        value = float(bar.get_height())
+        ax.text(
+            bar.get_x() + bar.get_width() * 0.5,
+            value + max(ymax * 0.02, 0.1),
+            fmt.format(value),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+
 def build_site_memory_summary(site_memory_root):
     rows = []
     unique_anchor_hashes = set()
@@ -44,7 +78,7 @@ def build_site_memory_summary(site_memory_root):
         if first_site_dir is None:
             first_site_dir = site_dir
             first_memory = memory
-        ref = memory.get("reference_template")
+        ref, _ = preferred_training_view(memory)
         ref_gray = to_grayscale_u8(ref) if ref is not None else None
         if ref_gray is not None and ref_gray.size > 0:
             unique_anchor_hashes.add(hashlib.md5(ref_gray.tobytes()).hexdigest())
@@ -70,7 +104,9 @@ def export_site_memory_composite(first_site_dir, first_memory, output_dir):
         return
 
     overview_path = first_site_dir / "lowmag_overview.png"
-    reference_path = first_site_dir / "reference_template.png"
+    reference_path = first_site_dir / "live_camera_view.png"
+    if not reference_path.exists():
+        reference_path = first_site_dir / "reference_template.png"
     overview = cv2.imread(str(overview_path), cv2.IMREAD_GRAYSCALE)
     reference = cv2.imread(str(reference_path), cv2.IMREAD_GRAYSCALE)
 
@@ -79,12 +115,12 @@ def export_site_memory_composite(first_site_dir, first_memory, output_dir):
 
     ax0 = fig.add_subplot(gs[:, 0])
     ax0.imshow(overview, cmap="gray")
-    ax0.set_title("Low-magnification overview")
+    ax0.set_title("A. Low-magnification overview")
     ax0.axis("off")
 
     ax1 = fig.add_subplot(gs[0, 1])
     ax1.imshow(reference, cmap="gray")
-    ax1.set_title("Reference template")
+    ax1.set_title("B. Saved live camera frame")
     ax1.axis("off")
 
     lowmag_landmarks = first_memory.get("lowmag_landmarks") or []
@@ -121,12 +157,12 @@ def export_site_memory_composite(first_site_dir, first_memory, output_dir):
         ax.axis("off")
 
     ax2 = fig.add_subplot(gs[1, 1])
-    make_patch_mosaic(lowmag_landmarks, "Low-mag landmarks", ax2)
+    make_patch_mosaic(lowmag_landmarks, "C. Low-mag landmark patches", ax2)
 
     ax3 = fig.add_subplot(gs[:, 2])
-    make_patch_mosaic(highmag_landmarks, "High-mag landmarks", ax3)
+    make_patch_mosaic(highmag_landmarks, "D. High-mag landmark patches", ax3)
 
-    fig.suptitle("Structured site memory example", fontsize=14, fontweight="bold")
+    fig.suptitle("Structured camera-POV site memory used for relocation", fontsize=14, fontweight="bold")
     fig.tight_layout()
     save_figure(fig, output_dir / "fig3_site_memory_composite")
     plt.close(fig)
@@ -136,33 +172,54 @@ def export_dataset_summary(df, unique_anchor_count, output_dir):
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 
     sample_counts = df["sample_id"].value_counts().sort_values(ascending=False)
-    axes[0, 0].bar(range(len(sample_counts)), sample_counts.values, color="#4c72b0")
-    axes[0, 0].set_title("Saved site memories by sample")
-    axes[0, 0].set_xlabel("Sample index")
-    axes[0, 0].set_ylabel("Memory count")
-    axes[0, 0].grid(True, axis="y", alpha=0.3)
+    top_counts = sample_counts.head(8)
+    labels = [f"Sample {idx + 1}" for idx in range(len(top_counts))]
+    bars = axes[0, 0].bar(labels, top_counts.values, color="#2f6db2")
+    annotate_bar_values(axes[0, 0], bars)
+    axes[0, 0].set_title("A. Site memories available per sample")
+    axes[0, 0].set_xlabel("Sample")
+    axes[0, 0].set_ylabel("Number of saved sites")
+    axes[0, 0].tick_params(axis="x", rotation=25)
+    style_axis(axes[0, 0])
 
-    axes[0, 1].hist(df["reference_width_px"], bins=min(10, max(len(df), 3)), alpha=0.8, color="#55a868")
-    axes[0, 1].set_title("Reference-template width distribution")
-    axes[0, 1].set_xlabel("Width (px)")
-    axes[0, 1].set_ylabel("Count")
-    axes[0, 1].grid(True, alpha=0.3)
+    width_counts = df["reference_width_px"].value_counts().sort_index()
+    bars = axes[0, 1].bar(
+        [f"{int(width)} px" for width in width_counts.index],
+        width_counts.values,
+        color="#2b9c78",
+    )
+    annotate_bar_values(axes[0, 1], bars)
+    axes[0, 1].set_title("B. Saved camera-frame resolution")
+    axes[0, 1].set_xlabel("Reference width")
+    axes[0, 1].set_ylabel("Number of site memories")
+    style_axis(axes[0, 1])
 
-    x = np.arange(len(df))
-    axes[1, 0].bar(x - 0.18, df["lowmag_landmark_count"], width=0.36, label="Low-mag")
-    axes[1, 0].bar(x + 0.18, df["highmag_landmark_count"], width=0.36, label="High-mag")
-    axes[1, 0].set_title("Landmark counts per site memory")
-    axes[1, 0].set_xlabel("Site memory index")
-    axes[1, 0].set_ylabel("Landmark count")
-    axes[1, 0].legend(fontsize=8)
-    axes[1, 0].grid(True, axis="y", alpha=0.3)
+    landmark_summary = pd.DataFrame(
+        {
+            "View": ["Low magnification", "High magnification"],
+            "Mean count": [
+                float(df["lowmag_landmark_count"].mean()),
+                float(df["highmag_landmark_count"].mean()),
+            ],
+        }
+    )
+    bars = axes[1, 0].bar(
+        landmark_summary["View"],
+        landmark_summary["Mean count"],
+        color=["#f28e2b", "#7b61b3"],
+    )
+    annotate_bar_values(axes[1, 0], bars, fmt="{:.1f}")
+    axes[1, 0].set_title("C. Mean landmark count per saved site")
+    axes[1, 0].set_xlabel("")
+    axes[1, 0].set_ylabel("Average landmark count")
+    style_axis(axes[1, 0])
 
     axes[1, 1].axis("off")
     summary = pd.DataFrame(
         [
             ["Saved site memories", len(df)],
-            ["Unique sample IDs", df["sample_id"].nunique()],
-            ["Unique reference anchors", unique_anchor_count],
+            ["Samples represented", df["sample_id"].nunique()],
+            ["Unique camera anchors", unique_anchor_count],
             ["Mean low-mag landmarks", round(float(df["lowmag_landmark_count"].mean()), 2)],
             ["Mean high-mag landmarks", round(float(df["highmag_landmark_count"].mean()), 2)],
         ],
@@ -170,11 +227,11 @@ def export_dataset_summary(df, unique_anchor_count, output_dir):
     )
     table = axes[1, 1].table(cellText=summary.values, colLabels=summary.columns, loc="center")
     table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    table.scale(1, 1.5)
-    axes[1, 1].set_title("Dataset summary")
+    table.set_fontsize(9)
+    table.scale(1, 1.6)
+    axes[1, 1].set_title("D. Camera-POV dataset summary")
 
-    fig.suptitle("Site-memory dataset summary", fontsize=14, fontweight="bold")
+    fig.suptitle("Camera-POV relocation dataset summary", fontsize=14, fontweight="bold")
     fig.tight_layout()
     save_figure(fig, output_dir / "fig3_site_memory_dataset_summary")
     plt.close(fig)
@@ -182,9 +239,9 @@ def export_dataset_summary(df, unique_anchor_count, output_dir):
     df.to_csv(output_dir / "fig3_site_memory_dataset_summary.csv", index=False)
 
 
-def export_real_pair_summary(output_dir):
+def export_real_pair_summary(site_memory_root, output_dir):
     rows = []
-    for sample_id, fa, fb in collect_real_pairs():
+    for sample_id, fa, fb in collect_real_pairs(site_memory_root=site_memory_root):
         gt = compute_ground_truth(
             fa["image"],
             fb["image"],
@@ -212,26 +269,37 @@ def export_real_pair_summary(output_dir):
 
     df = pd.DataFrame(rows)
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2))
-    axes[0].scatter(df["dx_px"], df["dy_px"], c=df["confidence"], cmap="viridis", s=35)
-    axes[0].set_title("Real-pair translation distribution")
-    axes[0].set_xlabel("dx (px)")
-    axes[0].set_ylabel("dy (px)")
-    axes[0].grid(True, alpha=0.3)
+    scatter = axes[0].scatter(df["dx_px"], df["dy_px"], c=df["confidence"], cmap="viridis", s=45)
+    axes[0].axhline(0.0, color="0.5", linewidth=0.8)
+    axes[0].axvline(0.0, color="0.5", linewidth=0.8)
+    axes[0].set_title("A. Translation labels from real saved pairs")
+    axes[0].set_xlabel("Horizontal shift, dx (pixels)")
+    axes[0].set_ylabel("Vertical shift, dy (pixels)")
+    axes[0].grid(True, alpha=0.25)
+    colorbar = fig.colorbar(scatter, ax=axes[0], fraction=0.046, pad=0.04)
+    colorbar.set_label("Match confidence")
 
-    axes[1].hist(df["angle_deg"], bins=min(12, max(len(df), 4)), color="#c44e52", alpha=0.85)
-    axes[1].set_title("Rotation-angle distribution")
-    axes[1].set_xlabel("Angle (deg)")
-    axes[1].set_ylabel("Count")
-    axes[1].grid(True, alpha=0.3)
+    bins = min(12, max(len(df), 4))
+    axes[1].hist(df["angle_deg"], bins=bins, color="#c44e52", alpha=0.85)
+    mean_angle = float(df["angle_deg"].mean())
+    axes[1].axvline(mean_angle, color="black", linestyle="--", linewidth=1.0, label=f"Mean = {mean_angle:.1f}°")
+    axes[1].set_title("B. Rotation labels from real saved pairs")
+    axes[1].set_xlabel("Relative rotation (degrees)")
+    axes[1].set_ylabel("Number of valid pairs")
+    axes[1].legend(frameon=False, loc="upper right")
+    style_axis(axes[1])
 
-    pair_counts = df["sample_id"].value_counts().sort_values(ascending=False)
-    axes[2].bar(range(len(pair_counts)), pair_counts.values, color="#8172b3")
-    axes[2].set_title("Valid real pairs by sample")
-    axes[2].set_xlabel("Sample index")
-    axes[2].set_ylabel("Pair count")
-    axes[2].grid(True, axis="y", alpha=0.3)
+    pair_counts = df["sample_id"].value_counts().sort_values(ascending=False).head(8)
+    labels = [f"Sample {idx + 1}" for idx in range(len(pair_counts))]
+    bars = axes[2].bar(labels, pair_counts.values, color="#7b61b3")
+    annotate_bar_values(axes[2], bars)
+    axes[2].set_title("C. Real-pair count per sample")
+    axes[2].set_xlabel("Sample")
+    axes[2].set_ylabel("Number of valid pairs")
+    axes[2].tick_params(axis="x", rotation=25)
+    style_axis(axes[2])
 
-    fig.suptitle("Real-pair remount-training summary", fontsize=14, fontweight="bold")
+    fig.suptitle("Real-pair training labels for remount prediction", fontsize=14, fontweight="bold")
     fig.tight_layout()
     save_figure(fig, output_dir / "fig4_real_pair_training_summary")
     plt.close(fig)
@@ -253,7 +321,7 @@ def main():
     df, unique_anchor_count, first_site_dir, first_memory = build_site_memory_summary(site_memory_root)
     export_site_memory_composite(first_site_dir, first_memory, output_dir)
     export_dataset_summary(df, unique_anchor_count, output_dir)
-    real_pair_df = export_real_pair_summary(output_dir)
+    real_pair_df = export_real_pair_summary(site_memory_root, output_dir)
 
     manifest = {
         "site_memory_root": str(site_memory_root),

@@ -425,11 +425,24 @@ class TkImagePreviewProxy:
         self.max_size = tuple(max_size)
         self.empty_text = str(empty_text)
         self._photo = None
+        self._full_image = None
+        self._full_caption = None
+        self._viewer_window = None
+        self._viewer_label = None
+        self._viewer_info = None
+        self._viewer_photo = None
+        self.widget.bind("<Button-1>", self._open_viewer, add="+")
         self.clear()
 
     def clear(self, caption=None):
         self._photo = None
+        self._full_image = None
+        self._full_caption = None
         self.widget.configure(image="", text=self.empty_text, compound="center")
+        try:
+            self.widget.configure(cursor="")
+        except Exception:
+            pass
         if self.caption_widget is not None and caption is not None:
             self.caption_widget.configure(text=str(caption))
 
@@ -446,6 +459,8 @@ class TkImagePreviewProxy:
             self.clear(caption=caption)
             return
         rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+        self._full_image = rgb.copy()
+        self._full_caption = None if caption is None else str(caption)
         pil_image = Image.fromarray(rgb)
         resampling = getattr(Image, "Resampling", None)
         resample_filter = resampling.LANCZOS if resampling is not None else Image.LANCZOS
@@ -457,8 +472,80 @@ class TkImagePreviewProxy:
         square_frame.paste(pil_image, (offset_x, offset_y))
         self._photo = ImageTk.PhotoImage(square_frame)
         self.widget.configure(image=self._photo, text="", compound="center")
+        try:
+            self.widget.configure(cursor="hand2")
+        except Exception:
+            pass
         if self.caption_widget is not None and caption is not None:
             self.caption_widget.configure(text=str(caption))
+
+    def _open_viewer(self, event=None):
+        if self._full_image is None or Image is None or ImageTk is None:
+            return
+        if self._viewer_window is None or not self._viewer_window.winfo_exists():
+            root = self.widget.winfo_toplevel()
+            viewer = tk.Toplevel(root)
+            viewer.configure(bg="#0f1720")
+            viewer.geometry("980x760")
+            title = self._full_caption or "Stored Image"
+            viewer.title(title)
+
+            info = tk.Label(
+                viewer,
+                text="",
+                bg="#0f1720",
+                fg="#d7e6f7",
+                anchor="w",
+                justify=tk.LEFT,
+                font=("Segoe UI", 9, "bold"),
+                padx=10,
+                pady=8,
+            )
+            info.pack(fill=tk.X)
+
+            image_label = tk.Label(
+                viewer,
+                bg="#0f1720",
+                anchor="center",
+                justify=tk.CENTER,
+            )
+            image_label.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+
+            self._viewer_window = viewer
+            self._viewer_label = image_label
+            self._viewer_info = info
+        self._refresh_viewer_image()
+        self._viewer_window.deiconify()
+        self._viewer_window.lift()
+        try:
+            self._viewer_window.focus_force()
+        except Exception:
+            pass
+
+    def _refresh_viewer_image(self):
+        if (
+            self._viewer_window is None
+            or not self._viewer_window.winfo_exists()
+            or self._viewer_label is None
+            or self._full_image is None
+            or Image is None
+            or ImageTk is None
+        ):
+            return
+        self._viewer_window.update_idletasks()
+        target_w = max(int(self._viewer_window.winfo_width()) - 24, 200)
+        target_h = max(int(self._viewer_window.winfo_height()) - 80, 200)
+        pil_image = Image.fromarray(self._full_image)
+        resampling = getattr(Image, "Resampling", None)
+        resample_filter = resampling.LANCZOS if resampling is not None else Image.LANCZOS
+        pil_image.thumbnail((target_w, target_h), resample_filter)
+        self._viewer_photo = ImageTk.PhotoImage(pil_image)
+        self._viewer_label.configure(image=self._viewer_photo)
+        title = self._full_caption or "Stored Image"
+        image_h, image_w = self._full_image.shape[:2]
+        self._viewer_window.title(title)
+        if self._viewer_info is not None:
+            self._viewer_info.configure(text=f"{title} | {image_w} x {image_h} px")
 
 
 class TkButtonProxy:
@@ -524,7 +611,11 @@ class TkDockWindowManager:
         self.window = window
         self.layout_path = Path(layout_path) if layout_path else DEFAULT_LAYOUT_PATH
         self.uses_external_window = True
+        self._attached_geometry = None
+        self._suspend_auto_attach_until = 0.0
+        self._last_root_signature = None
         self._position_window()
+        self._bind_attachment_events()
         self.window.protocol("WM_DELETE_WINDOW", self.window.withdraw)
 
     def _position_window(self):
@@ -534,13 +625,68 @@ class TkDockWindowManager:
             root_y = self.root.winfo_rooty()
             root_w = self.root.winfo_width()
             self.window.geometry(f"430x760+{root_x + root_w + 18}+{root_y + 40}")
+            self._attached_geometry = self.window.geometry()
         except Exception:
             self.window.geometry("430x760")
+            self._attached_geometry = self.window.geometry()
+
+    def _bind_attachment_events(self):
+        try:
+            self.window.transient(self.root)
+        except Exception:
+            pass
+        try:
+            self.window.attributes("-topmost", False)
+        except Exception:
+            pass
+        for widget in (self.root, self.window):
+            try:
+                widget.bind("<Configure>", self._handle_configure, add="+")
+            except Exception:
+                pass
+        self._schedule_attachment_poll()
+
+    def _schedule_attachment_poll(self):
+        try:
+            self.root.after(250, self._poll_attachment)
+        except Exception:
+            pass
+
+    def _poll_attachment(self):
+        self._sync_to_root(force=False)
+        self._schedule_attachment_poll()
+
+    def _handle_configure(self, event=None):
+        self._sync_to_root(force=False)
+
+    def _sync_to_root(self, force=False):
+        try:
+            if not self.root.winfo_exists() or not self.window.winfo_exists():
+                return
+            self.root.update_idletasks()
+            root_x = int(self.root.winfo_rootx())
+            root_y = int(self.root.winfo_rooty())
+            root_w = int(self.root.winfo_width())
+            root_h = int(self.root.winfo_height())
+            root_signature = (root_x, root_y, root_w, root_h)
+            if not force and root_signature == self._last_root_signature:
+                return
+            self._last_root_signature = root_signature
+            win_w = max(int(self.window.winfo_width()), 430)
+            win_h = max(int(self.window.winfo_height()), 760)
+            target_x = root_x + root_w + 12
+            target_y = root_y + max(24, min(40, root_h // 12))
+            geometry = f"{win_w}x{win_h}+{target_x}+{target_y}"
+            self.window.geometry(geometry)
+            self._attached_geometry = geometry
+        except Exception:
+            return
 
     def save_layout(self):
         payload = {
             "mode": "external_window",
             "window_geometry": self.window.geometry(),
+            "attached_geometry": self._attached_geometry,
             "selected_tab": int(self.notebook.index(self.notebook.select())),
         }
         self.layout_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -553,13 +699,368 @@ class TkDockWindowManager:
             payload = json.loads(self.layout_path.read_text(encoding="utf-8"))
         except Exception:
             return False
-        geometry = payload.get("window_geometry")
+        geometry = payload.get("attached_geometry") or payload.get("window_geometry")
         if geometry:
             self.window.geometry(str(geometry))
+            self._attached_geometry = str(geometry)
         selected_tab = payload.get("selected_tab")
         if isinstance(selected_tab, int) and 0 <= selected_tab < len(self.panels):
             self.notebook.select(selected_tab)
+        self._sync_to_root(force=True)
         return bool(geometry is not None or selected_tab is not None)
+
+
+class TkEmbeddedGroupManager:
+    def __init__(self, root, panels, notebook, host_frame, layout_path=None):
+        self.root = root
+        self.panels = panels
+        self.notebook = notebook
+        self.host_frame = host_frame
+        self.layout_path = Path(layout_path) if layout_path else DEFAULT_LAYOUT_PATH
+        self.uses_external_window = True
+
+    def save_layout(self):
+        payload = {
+            "mode": "embedded_group",
+            "selected_tab": int(self.notebook.index(self.notebook.select())),
+            "dock_width": int(max(self.host_frame.winfo_width(), 360)),
+        }
+        self.layout_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return self.layout_path
+
+    def load_layout(self):
+        if not self.layout_path.exists():
+            return False
+        try:
+            payload = json.loads(self.layout_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        dock_width = payload.get("dock_width")
+        if isinstance(dock_width, int) and dock_width >= 320:
+            self.host_frame.configure(width=dock_width)
+        selected_tab = payload.get("selected_tab")
+        if isinstance(selected_tab, int) and 0 <= selected_tab < len(self.panels):
+            self.notebook.select(selected_tab)
+        return bool(dock_width is not None or selected_tab is not None)
+
+
+def _create_embedded_group_dashboard(fig, layout_path=None):
+    manager = getattr(fig.canvas, "manager", None)
+    root = getattr(manager, "window", None)
+    tk_widget_getter = getattr(fig.canvas, "get_tk_widget", None)
+    if root is None or tk_widget_getter is None:
+        return None
+
+    canvas_widget = tk_widget_getter()
+    if canvas_widget is None:
+        return None
+
+    root.configure(bg="#dfe7f2")
+
+    try:
+        canvas_widget.pack_forget()
+    except Exception:
+        pass
+
+    dock_host = tk.Frame(root, bg="#e8edf5", width=460, highlightbackground="#c7d8ec", highlightthickness=1, bd=0)
+    dock_host.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 8), pady=8)
+    dock_host.pack_propagate(False)
+
+    canvas_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 4), pady=8)
+
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+
+    notebook = ttk.Notebook(dock_host)
+    notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+    button_objects = {}
+    panel_map = {}
+
+    def create_tab(panel_id, title, subtitle):
+        frame = tk.Frame(notebook, bg=PANEL_FACE, padx=10, pady=10)
+        frame.columnconfigure(0, weight=1)
+        notebook.add(frame, text=title)
+        heading = tk.Label(frame, text=title, bg=PANEL_FACE, fg=TITLE_COLOR, font=("Segoe UI", 10, "bold"), anchor="w")
+        heading.grid(row=0, column=0, sticky="ew")
+        subheading = tk.Label(frame, text=subtitle, bg=PANEL_FACE, fg=SUBTITLE_COLOR, font=("Segoe UI", 8), anchor="w")
+        subheading.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        panel = TkPanelProxy(panel_id)
+        panel_map[panel_id] = panel
+        return frame, panel
+
+    def add_button(parent, row, column, key, label, columnspan=1, sticky="ew", padx=4, pady=4):
+        button = tk.Button(
+            parent,
+            text=label,
+            bg=BUTTON_FACE,
+            fg=BUTTON_TEXT,
+            activebackground=BUTTON_HOVER,
+            relief=tk.RAISED,
+            bd=1,
+            font=("Segoe UI", 9),
+        )
+        button.grid(row=row, column=column, columnspan=columnspan, sticky=sticky, padx=padx, pady=pady)
+        proxy = TkButtonProxy(button)
+        button_objects[key] = proxy
+        return proxy
+
+    trace_frame, trace_panel = create_tab("trace", "Trace", "Movement, zoom, and click history")
+    trace_frame.rowconfigure(2, weight=1)
+    trace_text_widget = scrolledtext.ScrolledText(
+        trace_frame,
+        wrap=tk.WORD,
+        bg="#0b1220",
+        fg="#cde7ff",
+        insertbackground="#cde7ff",
+        font=("Consolas", 8),
+        relief=tk.FLAT,
+        borderwidth=0,
+        padx=6,
+        pady=6,
+        height=16,
+    )
+    trace_text_widget.grid(row=2, column=0, sticky="nsew")
+    trace_text_widget.configure(state=tk.DISABLED)
+    trace_text = TkTextProxy(trace_text_widget, history_lines=250)
+    trace_panel.children_by_role["trace_text"] = {"artist": trace_text}
+
+    navigation_frame, navigation_panel = create_tab("navigation", "Navigation", "Step-size and motion pad")
+    for index in range(3):
+        navigation_frame.columnconfigure(index, weight=1)
+    nav_radio_var = tk.StringVar(value="5 um")
+    nav_radio_frame = tk.LabelFrame(navigation_frame, text="Step Size", bg=PANEL_FACE, fg=TITLE_COLOR, font=("Segoe UI", 9, "bold"))
+    nav_radio_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+    for idx, label in enumerate(["1 um", "5 um", "50 um", "200 um"]):
+        radio = tk.Radiobutton(
+            nav_radio_frame,
+            text=label,
+            value=label,
+            variable=nav_radio_var,
+            bg=PANEL_FACE,
+            anchor="w",
+            font=("Segoe UI", 9),
+        )
+        radio.grid(row=idx, column=0, sticky="w", padx=8, pady=1)
+    radio_step = TkRadioProxy(nav_radio_var, ["1 um", "5 um", "50 um", "200 um"])
+    nav_radio_var.trace_add("write", lambda *_args: radio_step._dispatch())
+    add_button(navigation_frame, 3, 1, "up", "Up")
+    add_button(navigation_frame, 4, 0, "left", "Left")
+    add_button(navigation_frame, 4, 1, "down", "Down")
+    add_button(navigation_frame, 4, 2, "right", "Right")
+
+    motion_frame, motion_panel = create_tab("motion_view", "Motion", "Scan, PI, zoom, and focus")
+    motion_specs = [
+        ("pi", "PI Compensation Mode"),
+        ("auto", "Auto Scan"),
+        ("pause_motion", "Motion: ON"),
+        ("stop_move", "Stop Here"),
+        ("jump_target", "Go Now"),
+        ("random_move", "Random +/-200 um"),
+        ("focus_reset", "Best Focus"),
+        ("zoom_in", "Zoom +"),
+        ("zoom_out", "Zoom -"),
+        ("z_down", "Z -"),
+        ("z_up", "Z +"),
+    ]
+    for col in range(2):
+        motion_frame.columnconfigure(col, weight=1)
+    for idx, (key, label) in enumerate(motion_specs):
+        add_button(motion_frame, 2 + idx // 2, idx % 2, key, label)
+
+    status_frame, status_panel = create_tab("status_activity", "Status", "Live parameters")
+    status_frame.rowconfigure(3, weight=1)
+    status_label = tk.Label(status_frame, text="Parameters", bg=PANEL_FACE, fg=TITLE_COLOR, font=("Segoe UI", 9, "bold"), anchor="w")
+    status_label.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+    status_text_widget = scrolledtext.ScrolledText(
+        status_frame,
+        wrap=tk.NONE,
+        bg="#f6f9fe",
+        fg="#24384f",
+        insertbackground="#24384f",
+        font=("Consolas", 8),
+        relief=tk.FLAT,
+        borderwidth=0,
+        padx=6,
+        pady=6,
+        height=18,
+    )
+    status_text_widget.grid(row=3, column=0, sticky="nsew")
+    status_text_widget.configure(state=tk.DISABLED)
+    status_text = TkTextProxy(status_text_widget)
+    status_panel.children_by_role["status_text"] = {"artist": status_text}
+
+    relocation_frame, relocation_panel = create_tab("relocation", "Relocation", "Low-mag recall and high-mag verification")
+    for col in range(2):
+        relocation_frame.columnconfigure(col, weight=1)
+    relocation_specs = [
+        ("save_ref", "1. Save Region"),
+        ("remove_sample", "2. Remount"),
+        ("auto_origin", "3. Pick Origin"),
+        ("mark_landmarks", "3b. Mark Landmarks"),
+        ("ml_origin", "4. Find Origin"),
+        ("relocate", "5. Recover Site"),
+        ("research_patterns", "6. Verify Tip"),
+        ("ai_recall", "AI Recall"),
+        ("ai_zoom", "AI Zoom"),
+        ("focus_reset", "Best Focus"),
+        ("smooth_slower", "Slower"),
+        ("smooth_faster", "Faster"),
+        ("relocation_go_now", "Go Now"),
+    ]
+    for idx, (key, label) in enumerate(relocation_specs):
+        add_button(relocation_frame, 2 + idx // 2, idx % 2, key, label)
+    relocation_help_frame = tk.Frame(
+        relocation_frame,
+        bg="#f6f9fe",
+        highlightbackground="#c7d8ec",
+        highlightthickness=1,
+        bd=0,
+        height=64,
+    )
+    relocation_help_frame.grid(row=9, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 0))
+    relocation_help_frame.grid_propagate(False)
+    relocation_help_frame.columnconfigure(0, weight=1)
+    relocation_help_widget = tk.Label(
+        relocation_help_frame,
+        text="Hover over a relocation button to see what it does.",
+        bg="#f6f9fe",
+        fg=TEXT_COLOR,
+        justify=tk.LEFT,
+        anchor="nw",
+        wraplength=340,
+        font=("Segoe UI", 8),
+        padx=8,
+        pady=6,
+    )
+    relocation_help_widget.grid(row=0, column=0, sticky="nsew")
+    relocation_help = TkLabelProxy(relocation_help_widget)
+    relocation_panel.children_by_role["relocation_help"] = {"artist": relocation_help}
+    relocation_preview_label = tk.Label(
+        relocation_frame,
+        text="Stored Relocation Images",
+        bg=PANEL_FACE,
+        fg=TITLE_COLOR,
+        font=("Segoe UI", 9, "bold"),
+        anchor="w",
+    )
+    relocation_preview_label.grid(row=9, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 4))
+    preview_frame = tk.Frame(relocation_frame, bg=PANEL_FACE)
+    preview_frame.grid(row=10, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 6))
+    preview_frame.columnconfigure(0, weight=1)
+    preview_frame.columnconfigure(1, weight=1)
+    overview_preview = tk.Label(
+        preview_frame,
+        bg="#f6f9fe",
+        fg="#6b7f95",
+        relief=tk.SOLID,
+        borderwidth=1,
+        width=180,
+        height=180,
+        anchor="center",
+        justify=tk.CENTER,
+        font=("Segoe UI", 8),
+        text="No overview",
+    )
+    overview_preview.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+    reference_preview = tk.Label(
+        preview_frame,
+        bg="#f6f9fe",
+        fg="#6b7f95",
+        relief=tk.SOLID,
+        borderwidth=1,
+        width=180,
+        height=180,
+        anchor="center",
+        justify=tk.CENTER,
+        font=("Segoe UI", 8),
+        text="No reference",
+    )
+    reference_preview.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+    overview_caption = tk.Label(preview_frame, text="Low-mag overview", bg=PANEL_FACE, fg=SUBTITLE_COLOR, font=("Segoe UI", 8))
+    overview_caption.grid(row=1, column=0, sticky="ew", pady=(3, 0))
+    reference_caption = tk.Label(preview_frame, text="High-mag reference", bg=PANEL_FACE, fg=SUBTITLE_COLOR, font=("Segoe UI", 8))
+    reference_caption.grid(row=1, column=1, sticky="ew", pady=(3, 0))
+    relocation_panel.children_by_role["relocation_overview_image"] = {
+        "artist": TkImagePreviewProxy(overview_preview, overview_caption, max_size=(180, 180), empty_text="No overview"),
+    }
+    relocation_panel.children_by_role["relocation_reference_image"] = {
+        "artist": TkImagePreviewProxy(reference_preview, reference_caption, max_size=(180, 180), empty_text="No reference"),
+    }
+    relocation_status_label = tk.Label(
+        relocation_frame,
+        text="Relocation Storage And Progress",
+        bg=PANEL_FACE,
+        fg=TITLE_COLOR,
+        font=("Segoe UI", 9, "bold"),
+        anchor="w",
+    )
+    relocation_status_label.grid(row=11, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 4))
+    relocation_frame.rowconfigure(12, weight=1)
+    relocation_status_widget = scrolledtext.ScrolledText(
+        relocation_frame,
+        wrap=tk.WORD,
+        bg="#f6f9fe",
+        fg="#24384f",
+        insertbackground="#24384f",
+        font=("Consolas", 8),
+        relief=tk.FLAT,
+        borderwidth=0,
+        padx=6,
+        pady=6,
+        height=14,
+    )
+    relocation_status_widget.grid(row=12, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 0))
+    relocation_status_widget.configure(state=tk.DISABLED)
+    relocation_status_text = TkTextProxy(relocation_status_widget)
+    relocation_panel.children_by_role["relocation_status_text"] = {"artist": relocation_status_text}
+    relocation_default_help = relocation_help.get_text()
+    relocation_hover_map = {
+        "save_ref": "Save Region: store the current low-mag context, high-mag template, zoom context, and landmark memory for later recovery.",
+        "remove_sample": "Remount: simulate taking the sample out and putting it back with shift only.",
+        "auto_origin": "Pick Origin: choose the strongest distinctive local landmark in the current viewport as the working origin reference.",
+        "mark_landmarks": "Mark Landmarks: before remount, manually click 2 to 6 trusted camera-POV landmarks to store human-guided high-mag references for later recovery.",
+        "ml_origin": "Find Origin: search the full sample for the saved origin pattern and move toward the recognized origin if confidence is good.",
+        "relocate": "Recover Site: run coarse low-mag recall, estimate rotation and offset, refine with high-mag matching, and propose the recovered site.",
+        "research_patterns": "Verify Tip: re-match multiple remembered landmark patterns around the tip to confirm whether the cantilever is at the correct place.",
+        "ai_recall": "AI Recall: one-click AI relocation - load site memory, recognize pattern with rotation, move cantilever, verify. Click to correct if needed.",
+        "ai_zoom": "AI Zoom: recall saved zoom level, AI-recognize pattern, auto zoom-out search if not found, then move + verify.",
+        "smooth_slower": "Slower: reduce the smooth animated cantilever movement speed so relocation motion is easier to watch.",
+        "smooth_faster": "Faster: increase the smooth animated cantilever movement speed for quicker relocation travel.",
+        "relocation_go_now": "Go Now: immediately jump to the pending AI relocation target, or to the current motion destination if no relocation target is pending.",
+    }
+    for key, message in relocation_hover_map.items():
+        button_objects[key].bind_hover_text(relocation_help, message, relocation_default_help)
+
+    utility_frame, utility_panel = create_tab("utility", "Utility", "Surface image, plots, and data")
+    for col in range(2):
+        utility_frame.columnconfigure(col, weight=1)
+    utility_specs = [
+        ("load_default", "Load Default"),
+        ("load_image", "Load Image"),
+        ("save_default", "Save As Default"),
+        ("save_layout", "Save Dock Layout"),
+        ("scale_bar", "Scale Bar: 200 um"),
+        ("clear", "Clear Path"),
+        ("coord", "Tip Position"),
+        ("hud", "HUD: ON"),
+    ]
+    for idx, (key, label) in enumerate(utility_specs):
+        add_button(utility_frame, 2 + idx // 2, idx % 2, key, label)
+
+    panels = [
+        trace_panel,
+        navigation_panel,
+        motion_panel,
+        status_panel,
+        relocation_panel,
+        utility_panel,
+    ]
+    dock_manager = TkEmbeddedGroupManager(root, panels, notebook, dock_host, layout_path=layout_path)
+    return button_objects, radio_step, status_text, trace_text, dock_manager
 
 
 def _create_external_dock_dashboard(fig, layout_path=None):
@@ -571,6 +1072,10 @@ def _create_external_dock_dashboard(fig, layout_path=None):
     dock_window = tk.Toplevel(root)
     dock_window.title("AFM Dock Group")
     dock_window.configure(bg="#e8edf5")
+    try:
+        dock_window.transient(root)
+    except Exception:
+        pass
 
     style = ttk.Style(dock_window)
     try:
@@ -703,11 +1208,13 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         ("save_ref", "1. Save Region"),
         ("remove_sample", "2. Remount"),
         ("auto_origin", "3. Pick Origin"),
+        ("mark_landmarks", "3b. Mark Landmarks"),
         ("ml_origin", "4. Find Origin"),
         ("relocate", "5. Recover Site"),
         ("research_patterns", "6. Verify Tip"),
         ("ai_recall", "AI Recall"),
         ("ai_zoom", "AI Zoom"),
+        ("focus_reset", "Best Focus"),
         ("smooth_slower", "Slower"),
         ("smooth_faster", "Faster"),
         ("relocation_go_now", "Go Now"),
@@ -722,7 +1229,7 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         bd=0,
         height=64,
     )
-    relocation_help_frame.grid(row=8, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 0))
+    relocation_help_frame.grid(row=9, column=0, columnspan=2, sticky="ew", padx=4, pady=(10, 0))
     relocation_help_frame.grid_propagate(False)
     relocation_help_frame.columnconfigure(0, weight=1)
     relocation_help_widget = tk.Label(
@@ -823,6 +1330,7 @@ def _create_external_dock_dashboard(fig, layout_path=None):
         "save_ref": "Save Region: store the current low-mag context, high-mag template, zoom context, and landmark memory for later recovery.",
         "remove_sample": "Remount: simulate taking the sample out and putting it back with shift only.",
         "auto_origin": "Pick Origin: choose the strongest distinctive local landmark in the current viewport as the working origin reference.",
+        "mark_landmarks": "Mark Landmarks: before remount, manually click 2 to 6 trusted camera-POV landmarks to store human-guided high-mag references for later recovery.",
         "ml_origin": "Find Origin: search the full sample for the saved origin pattern and move toward the recognized origin if confidence is good.",
         "relocate": "Recover Site: run coarse low-mag recall, estimate rotation and offset, refine with high-mag matching, and propose the recovered site.",
         "research_patterns": "Verify Tip: re-match multiple remembered landmark patterns around the tip to confirm whether the cantilever is at the correct place.",
@@ -967,10 +1475,11 @@ def _layout_motion(panel):
         panel.set_child_bounds("z_up", [0.68, 0.08, 0.12, BUTTON_HEIGHT_WIDE])
         panel.set_child_bounds("stop_move", [0.05, 0.31, 0.20, BUTTON_HEIGHT_WIDE])
         panel.set_child_bounds("jump_target", [0.26, 0.31, 0.20, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("focus_reset", [0.54, 0.31, 0.27, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("random_move", [0.54, 0.31, 0.27, BUTTON_HEIGHT_WIDE])
         panel.set_child_bounds("pause_motion", [0.05, 0.54, 0.20, BUTTON_HEIGHT_WIDE])
         panel.set_child_bounds("pi", [0.26, 0.54, 0.20, BUTTON_HEIGHT_WIDE])
         panel.set_child_bounds("auto", [0.54, 0.54, 0.27, BUTTON_HEIGHT_WIDE])
+        panel.set_child_bounds("focus_reset", [0.54, 0.77, 0.27, BUTTON_HEIGHT_WIDE])
     else:
         panel.set_child_bounds("z_down", [0.06, 0.08, 0.40, BUTTON_HEIGHT_COMPACT])
         panel.set_child_bounds("z_up", [0.52, 0.08, 0.40, BUTTON_HEIGHT_COMPACT])
@@ -979,9 +1488,10 @@ def _layout_motion(panel):
         panel.set_child_bounds("focus_reset", [0.06, 0.30, 0.86, BUTTON_HEIGHT_COMPACT])
         panel.set_child_bounds("stop_move", [0.06, 0.41, 0.40, BUTTON_HEIGHT_COMPACT])
         panel.set_child_bounds("jump_target", [0.52, 0.41, 0.40, BUTTON_HEIGHT_COMPACT])
-        panel.set_child_bounds("pause_motion", [0.06, 0.52, 0.40, BUTTON_HEIGHT_COMPACT])
-        panel.set_child_bounds("pi", [0.52, 0.52, 0.40, BUTTON_HEIGHT_COMPACT])
-        panel.set_child_bounds("auto", [0.06, 0.63, 0.86, BUTTON_HEIGHT_COMPACT])
+        panel.set_child_bounds("random_move", [0.06, 0.52, 0.86, BUTTON_HEIGHT_COMPACT])
+        panel.set_child_bounds("pause_motion", [0.06, 0.63, 0.40, BUTTON_HEIGHT_COMPACT])
+        panel.set_child_bounds("pi", [0.52, 0.63, 0.40, BUTTON_HEIGHT_COMPACT])
+        panel.set_child_bounds("auto", [0.06, 0.74, 0.86, BUTTON_HEIGHT_COMPACT])
 
 
 def _layout_status(panel):
@@ -997,7 +1507,7 @@ def _layout_trace(panel):
 def _layout_relocation(panel):
     width, height = panel.bounds[2], panel.bounds[3]
     if width >= height * 3.0:
-        button_w = 0.095
+        button_w = 0.086
         button_h = BUTTON_HEIGHT_WIDE
         gap = 0.008
         start_x = 0.03
@@ -1006,11 +1516,13 @@ def _layout_relocation(panel):
             "save_ref",
             "remove_sample",
             "auto_origin",
+            "mark_landmarks",
             "ml_origin",
             "relocate",
             "research_patterns",
             "ai_recall",
             "ai_zoom",
+            "focus_reset",
             "smooth_slower",
             "smooth_faster",
             "relocation_go_now",
@@ -1018,29 +1530,44 @@ def _layout_relocation(panel):
         for index, role in enumerate(roles):
             panel.set_child_bounds(role, [start_x + index * (button_w + gap), y, button_w, button_h])
     elif width >= height * 1.1:
-        panel.set_child_bounds("research_patterns", [0.05, 0.08, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("relocate", [0.52, 0.08, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("auto_origin", [0.05, 0.23, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("ml_origin", [0.52, 0.23, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("save_ref", [0.05, 0.38, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("remove_sample", [0.52, 0.38, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("ai_recall", [0.05, 0.53, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("ai_zoom", [0.52, 0.53, 0.43, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("smooth_slower", [0.05, 0.68, 0.27, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("smooth_faster", [0.365, 0.68, 0.27, BUTTON_HEIGHT_WIDE])
-        panel.set_child_bounds("relocation_go_now", [0.68, 0.68, 0.27, BUTTON_HEIGHT_WIDE])
-    else:
-        y_inc = 0.08
-        y_start = 0.06
-        roles_vert = [
+        button_w = 0.27
+        button_h = BUTTON_HEIGHT_WIDE
+        gap_x = 0.04
+        xs = [0.05, 0.05 + button_w + gap_x, 0.05 + 2.0 * (button_w + gap_x)]
+        ys = [0.08, 0.24, 0.40, 0.56, 0.72]
+        layout_roles = [
             "save_ref",
             "remove_sample",
             "auto_origin",
+            "mark_landmarks",
             "ml_origin",
             "relocate",
             "research_patterns",
             "ai_recall",
             "ai_zoom",
+            "focus_reset",
+            "smooth_slower",
+            "smooth_faster",
+            "relocation_go_now",
+        ]
+        for index, role in enumerate(layout_roles):
+            row = index // 3
+            col = index % 3
+            panel.set_child_bounds(role, [xs[col], ys[row], button_w, button_h])
+    else:
+        y_inc = 0.075
+        y_start = 0.06
+        roles_vert = [
+            "save_ref",
+            "remove_sample",
+            "auto_origin",
+            "mark_landmarks",
+            "ml_origin",
+            "relocate",
+            "research_patterns",
+            "ai_recall",
+            "ai_zoom",
+            "focus_reset",
             "smooth_slower",
             "smooth_faster",
             "relocation_go_now",
@@ -1081,6 +1608,10 @@ def _layout_utility(panel):
 
 
 def setup_dashboard(fig, layout_path=None):
+    embedded_dashboard = _create_embedded_group_dashboard(fig, layout_path=layout_path)
+    if embedded_dashboard is not None:
+        return embedded_dashboard
+
     external_dashboard = _create_external_dock_dashboard(fig, layout_path=layout_path)
     if external_dashboard is not None:
         return external_dashboard
@@ -1113,6 +1644,7 @@ def setup_dashboard(fig, layout_path=None):
         ("pause_motion", "Motion: ON", 8.7),
         ("stop_move", "Stop Here", 8.3),
         ("jump_target", "Go Now", 8.7),
+        ("random_move", "Random +/-200 um", 8.0),
         ("focus_reset", "Best Focus", 8.3),
         ("zoom_in", "Zoom +", 8.7),
         ("zoom_out", "Zoom -", 8.7),
@@ -1147,11 +1679,13 @@ def setup_dashboard(fig, layout_path=None):
         relocation_panel.add_button("save_ref", "1. Save Region", fontsize=9.0),
         relocation_panel.add_button("remove_sample", "2. Remount", fontsize=9.1),
         relocation_panel.add_button("auto_origin", "3. Pick Origin", fontsize=9.0),
+        relocation_panel.add_button("mark_landmarks", "3b. Mark Landmarks", fontsize=8.5),
         relocation_panel.add_button("ml_origin", "4. Find Origin", fontsize=9.0),
         relocation_panel.add_button("relocate", "5. Recover Site", fontsize=9.1),
         relocation_panel.add_button("research_patterns", "6. Verify Tip", fontsize=9.0),
         relocation_panel.add_button("ai_recall", "AI Recall", fontsize=8.8),
         relocation_panel.add_button("ai_zoom", "AI Zoom", fontsize=8.8),
+        relocation_panel.add_button("focus_reset", "Best Focus", fontsize=8.8),
         relocation_panel.add_button("smooth_slower", "Slower", fontsize=8.8),
         relocation_panel.add_button("smooth_faster", "Faster", fontsize=8.8),
         relocation_panel.add_button("relocation_go_now", "Go Now", fontsize=8.8),

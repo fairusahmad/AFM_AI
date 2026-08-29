@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from collections import deque
 import json
+import time
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Rectangle
 from pathlib import Path
@@ -15,17 +16,40 @@ from afm_data import TrajectoryData
 from afm_relocation import analyze_landmark_geometry
 from afm_state import AFMState
 from afm_ui import setup_dashboard, setup_figure, setup_probe_graphics
-from afm_utils import create_stage_fov, get_defocus_metrics, get_tip_position, render_camera_frame, render_camera_recognition_frame, update_title
+from afm_utils import create_stage_fov, get_defocus_metrics, get_tip_position, render_camera_frame, render_camera_matching_frame, render_camera_recognition_frame, update_title
 from hysteresis import NanoPositioner
 from sample_generation import artifact_layer, height_um, sample as stage_surface_image, width_um
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_SETTINGS_PATH = BASE_DIR / "afm_default_settings.json"
 DOCK_LAYOUT_PATH = BASE_DIR / "afm_dock_layout.json"
+SESSION_TRACE_DIR = BASE_DIR / "collected_data" / "session_traces"
 DEFAULT_IMAGE_CONFIG = {
     "path": Path(r"c:\Users\fairu\Downloads\To delete\ChatGPT Image May 20, 2026, 02_20_13 PM.png"),
     "autoload": True,
 }
+
+
+class SessionTraceRecorder:
+    def __init__(self, base_dir):
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.session_id = time.strftime("%Y%m%d_%H%M%S")
+        self.path = self.base_dir / f"afm_session_trace_{self.session_id}.log"
+        self._line_count = 0
+
+    def append(self, message):
+        line = str(message)
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{timestamp}] {line}\n")
+        self._line_count += 1
+
+    def snapshot_path(self):
+        return self.path
+
+    def line_count(self):
+        return int(self._line_count)
 
 
 class StatusTextDock:
@@ -348,7 +372,20 @@ initial_fov, initial_outside_mask, initial_ix, initial_iy = create_stage_fov(
 state.current_fov_raw = initial_fov.copy()
 state.current_camera_view, _ = render_camera_recognition_frame(
     initial_fov,
-    camera_resolution=state.camera_reference_resolution,
+    camera_resolution=state.camera_resolution,
+    outside_mask=initial_outside_mask,
+    focus_model=state.get_focus_model(),
+    fov_width_um=state.fov_width,
+    fov_height_um=state.fov_height,
+    body_width_um=state.probe_body_width_um,
+    tip_width_um=state.probe_tip_width_um,
+    tip_total_length_um=state.probe_tip_total_length_um,
+    triangular_tip_length_um=state.probe_triangular_tip_length_um,
+    visible_body_depth_um=state.probe_visible_body_depth_um,
+)
+state.current_matching_view, _ = render_camera_matching_frame(
+    initial_fov,
+    camera_resolution=(512, 384),
     outside_mask=initial_outside_mask,
     focus_model=state.get_focus_model(),
     fov_width_um=state.fov_width,
@@ -409,6 +446,99 @@ tip_text = ax.text(
     va="bottom",
     zorder=28,
     bbox=dict(boxstyle="round,pad=0.15", facecolor=(0, 0, 0, 0.35), edgecolor="none"),
+)
+manual_reference_markers = []
+manual_reference_labels = []
+for _ in range(6):
+    marker, = ax.plot(
+        [],
+        [],
+        marker="x",
+        markersize=10,
+        markeredgewidth=2.0,
+        color="#ffd166",
+        linestyle="None",
+        zorder=33,
+        visible=False,
+    )
+    label = ax.text(
+        0,
+        0,
+        "",
+        color="#fff2a8",
+        fontsize=9,
+        ha="left",
+        va="bottom",
+        zorder=34,
+        bbox=dict(boxstyle="round,pad=0.14", facecolor=(0, 0, 0, 0.35), edgecolor="none"),
+        visible=False,
+    )
+    manual_reference_markers.append(marker)
+    manual_reference_labels.append(label)
+manual_reference_summary = ax.text(
+    0,
+    0,
+    "",
+    color="#ffe08a",
+    fontsize=9,
+    ha="left",
+    va="top",
+    zorder=34,
+    bbox=dict(boxstyle="round,pad=0.16", facecolor=(0, 0, 0, 0.32), edgecolor="none"),
+    visible=False,
+)
+lowmag_guidance_target_marker, = ax.plot(
+    [],
+    [],
+    marker="+",
+    markersize=16,
+    markeredgewidth=2.2,
+    color="#f97316",
+    linestyle="None",
+    zorder=34,
+    visible=False,
+)
+lowmag_guidance_target_text = ax.text(
+    0,
+    0,
+    "",
+    color="#ffd9bf",
+    fontsize=9,
+    ha="left",
+    va="bottom",
+    zorder=34,
+    bbox=dict(boxstyle="round,pad=0.14", facecolor=(0, 0, 0, 0.35), edgecolor="none"),
+    visible=False,
+)
+lowmag_guidance_lines = []
+lowmag_guidance_labels = []
+for _ in range(8):
+    line, = ax.plot([], [], color="#f97316", linewidth=1.3, alpha=0.95, zorder=33, visible=False)
+    label = ax.text(
+        0,
+        0,
+        "",
+        color="#ffd9bf",
+        fontsize=8,
+        ha="left",
+        va="bottom",
+        zorder=34,
+        bbox=dict(boxstyle="round,pad=0.12", facecolor=(0, 0, 0, 0.28), edgecolor="none"),
+        visible=False,
+    )
+    lowmag_guidance_lines.append(line)
+    lowmag_guidance_labels.append(label)
+lowmag_guidance_summary = ax.text(
+    0,
+    0,
+    "",
+    color="#ffd0aa",
+    fontsize=8,
+    ha="left",
+    va="top",
+    zorder=34,
+    bbox=dict(boxstyle="round,pad=0.16", facecolor=(0, 0, 0, 0.30), edgecolor="none"),
+    visible=False,
 )
 scan_region = Rectangle(
     (0, 0),
@@ -521,6 +651,7 @@ relocation_tooltips = {
     "save_ref": "Save Region: store the current low-mag context, high-mag template, zoom context, and landmark memory for later recovery.",
     "remove_sample": "Remount: simulate taking the sample out and putting it back with shift only.",
     "auto_origin": "Pick Origin: choose the strongest distinctive local landmark in the current viewport as the working origin reference.",
+    "mark_landmarks": "Mark Landmarks: before remount, manually click 2 to 6 trusted camera-POV landmarks to store human-guided high-mag references for later recovery.",
     "ml_origin": "Find Origin: search the full sample for the saved origin pattern and move toward the recognized origin if confidence is good.",
     "relocate": "Recover Site: run coarse low-mag recall, estimate rotation and offset, refine with high-mag matching, and propose the recovered site.",
     "research_patterns": "Verify Tip: re-match multiple remembered landmark patterns around the tip to confirm whether the cantilever is at the correct place.",
@@ -803,6 +934,7 @@ def _progress_label(done, waiting_label="[WAIT]"):
 def build_relocation_progress_lines():
     site_memory = state.site_memory or {}
     overview = site_memory.get("overview") or {}
+    live_camera_view = site_memory.get("live_camera_view")
     reference_template = site_memory.get("reference_template")
     origin_template = site_memory.get("origin_template")
     highmag_landmarks = site_memory.get("highmag_landmarks") or []
@@ -832,18 +964,23 @@ def build_relocation_progress_lines():
         f"Site Memory ID: {site_memory.get('site_id', 'not saved')}",
         f"Saved Folder: {saved_dir}",
         f"Captured At: {site_memory.get('captured_at', 'not saved')}",
-        f"Reference Template: {_format_image_shape(reference_template)}",
+        f"Saved Viewport Camera Frame: {_format_image_shape(live_camera_view)}",
+        f"Saved Matching Template: {_format_image_shape(reference_template)}",
+        "Fine Relocation Source: saved live camera frame only",
         f"Low-Mag Overview: {_format_image_shape(overview_image)}",
         f"Origin Template: {_format_image_shape(origin_template)}",
         f"Low-Mag Landmarks: {len(lowmag_landmarks)}",
         f"High-Mag Landmarks: {len(highmag_landmarks)}",
         f"Saved Zooms: coarse={coarse_zoom if coarse_zoom is not None else 'n/a'}x  final={final_zoom if final_zoom is not None else 'n/a'}x",
         f"Saved Origin: {origin_info.get('label', 'not saved') if origin_info else 'not saved'}",
+        f"Tip-Relative Anchor In Saved View: ({site_memory.get('reference_tip_local', {}).get('x_um', 'n/a')}, {site_memory.get('reference_tip_local', {}).get('y_um', 'n/a')}) um",
+        "Note: viewport coordinates are local image bookkeeping, not a real sample origin.",
         "",
         "Progress",
         f"{_progress_label(sample_ready)} Sample image loaded",
         f"{_progress_label(state.origin_defined or origin_info is not None)} Named origin available",
         f"{_progress_label(site_saved)} Site memory captured",
+        f"{_progress_label(live_camera_view is not None)} Live camera frame stored",
         f"{_progress_label(reference_template is not None)} Reference image stored",
         f"{_progress_label(overview_image is not None)} Low-mag overview stored",
         f"{_progress_label(len(lowmag_landmarks) > 0)} Coarse landmarks stored",
@@ -890,23 +1027,36 @@ def refresh_relocation_image_previews(site_memory):
         overview_image = overview.get("image")
         overview_scale_x = overview.get("scale_x_um_per_px")
         overview_scale_y = overview.get("scale_y_um_per_px")
+        overview_zoom = overview.get("zoom_level", (site_memory or {}).get("coarse_zoom_level"))
+        overview_render_mode = str(overview.get("render_mode", "matching"))
         if overview_image is not None:
             caption = "Low-mag overview"
+            if overview_zoom is not None:
+                caption += f" ({float(overview_zoom):.2f}x"
+                caption += ", sharp" if overview_render_mode == "matching_no_blur" else ", blurred"
+                caption += ")"
             if overview_scale_x is not None and overview_scale_y is not None:
                 caption += f" ({overview_scale_x:.2f} x {overview_scale_y:.2f} um/px)"
             relocation_overview_image.set_image(overview_image, caption=caption)
         else:
             relocation_overview_image.clear(caption="Low-mag overview")
     if relocation_reference_image is not None:
+        saved_live_view = (site_memory or {}).get("live_camera_view")
         reference_template = (site_memory or {}).get("reference_template")
-        final_zoom = (site_memory or {}).get("final_zoom_level", (site_memory or {}).get("zoom_level"))
-        if reference_template is not None:
-            caption = "High-mag reference"
+        preview_image = saved_live_view if saved_live_view is not None else reference_template
+        final_zoom = (site_memory or {}).get("reference_view_zoom_level", (site_memory or {}).get("final_zoom_level", (site_memory or {}).get("zoom_level")))
+        reference_kind = str((site_memory or {}).get("reference_view_kind", "saved_live_camera_frame"))
+        if preview_image is not None:
+            caption = "Saved live camera frame"
+            if saved_live_view is None:
+                caption = "High-mag reference (legacy)"
+            elif reference_kind == "fine_live_camera_frame":
+                caption = "Saved fine live camera frame"
             if final_zoom is not None:
                 caption += f" ({float(final_zoom):.2f}x)"
-            relocation_reference_image.set_image(reference_template, caption=caption)
+            relocation_reference_image.set_image(preview_image, caption=caption)
         else:
-            relocation_reference_image.clear(caption="High-mag reference")
+            relocation_reference_image.clear(caption="Saved live camera frame")
 
 
 def refresh_status_panel():
@@ -977,6 +1127,38 @@ def refresh_status_panel():
             hud_landmark_line += f"  angle err={hud_landmark_report['mean_angle_error_deg']:.1f} deg"
     else:
         hud_landmark_line = "HUD Landmark Matches: not active"
+    lowmag_guidance = getattr(state, "lowmag_guidance_report", None) or {}
+    if lowmag_guidance:
+        lowmag_guidance_line = (
+            f"Low-mag Tip Map: support={lowmag_guidance.get('support_count', 0)}  "
+            f"conf={lowmag_guidance.get('confidence', 0.0):.3f}"
+        )
+        if lowmag_guidance.get("overview_similarity") is not None:
+            lowmag_guidance_line += f"  overview={float(lowmag_guidance['overview_similarity']):.3f}"
+        if lowmag_guidance.get("estimated_tip_distance_um") is not None:
+            lowmag_guidance_line += f"  tip shift={lowmag_guidance['estimated_tip_distance_um']:.1f} um"
+        if lowmag_guidance.get("search_frames") is not None:
+            lowmag_guidance_line += f"  frames={int(lowmag_guidance['search_frames'])}"
+    else:
+        lowmag_guidance_line = "Low-mag Tip Map: not active"
+
+    lowmag_jump_line = "Low-mag Jump: not active"
+    if lowmag_guidance:
+        raw_dx = lowmag_guidance.get("estimated_tip_dx_um")
+        raw_dy = lowmag_guidance.get("estimated_tip_dy_um")
+        ml_correction = lowmag_guidance.get("ml_correction") or {}
+        corrected_dx = ml_correction.get("predicted_dx_um")
+        corrected_dy = ml_correction.get("predicted_dy_um")
+        jump_parts = []
+        if raw_dx is not None and raw_dy is not None:
+            jump_parts.append(f"raw dX={float(raw_dx):+6.1f}  dY={float(raw_dy):+6.1f}")
+        if corrected_dx is not None and corrected_dy is not None:
+            jump_parts.append(f"ML dX={float(corrected_dx):+6.1f}  dY={float(corrected_dy):+6.1f}")
+        stop_reason = lowmag_guidance.get("search_stop_reason")
+        if stop_reason:
+            jump_parts.append(f"stop={stop_reason}")
+        if jump_parts:
+            lowmag_jump_line = "Low-mag Jump: " + "  |  ".join(jump_parts)
     relocation_progress_lines = build_relocation_progress_lines()
 
     entries = [
@@ -1137,6 +1319,14 @@ def refresh_status_panel():
             "text": hud_landmark_line,
             "tooltip": "Shows how many remembered high-magnification landmark patterns are currently re-matched in the HUD and the geometry-consistency confidence built from their relative spacing.",
         },
+        {
+            "text": lowmag_guidance_line,
+            "tooltip": "Shows the low-magnification landmark guidance map built from saved landmark-to-tip distances and re-matched around the cantilever during coarse relocation.",
+        },
+        {
+            "text": lowmag_jump_line,
+            "tooltip": "Shows the coarse low-magnification jump predicted from the landmark search, including the raw geometry estimate and the ML-corrected estimate when available.",
+        },
     ]
     if status_dock is not None:
         status_dock.set_entries(entries)
@@ -1151,6 +1341,8 @@ def refresh_status_panel():
 
 def log_message(message):
     print(message)
+    if session_trace_recorder is not None:
+        session_trace_recorder.append(message)
     if trace_dock is not None:
         trace_dock.append(message)
     elif activity_text is not None:
@@ -1218,6 +1410,8 @@ def update_tip_overlay():
     if not hud_visible:
         tip_marker.set_data([], [])
         tip_text.set_text("")
+        update_manual_reference_overlay()
+        update_lowmag_guidance_overlay(tip_x, tip_y)
         update_landmark_overlay(tip_x, tip_y, hud_visible)
         return
 
@@ -1228,7 +1422,124 @@ def update_tip_overlay():
     scan_region.set_xy((tip_x - half_scan, tip_y - half_scan))
     scan_region.set_width(state.scan_region_size_um)
     scan_region.set_height(state.scan_region_size_um)
+    update_manual_reference_overlay()
+    update_lowmag_guidance_overlay(tip_x, tip_y)
     update_landmark_overlay(tip_x, tip_y, hud_visible)
+
+
+def update_manual_reference_overlay():
+    for marker in manual_reference_markers:
+        marker.set_visible(False)
+        marker.set_data([], [])
+    for label in manual_reference_labels:
+        label.set_visible(False)
+        label.set_text("")
+    manual_reference_summary.set_visible(False)
+    manual_reference_summary.set_text("")
+
+    landmarks = list(getattr(state, "manual_reference_landmarks", []))
+    if not landmarks:
+        return
+
+    in_view_count = 0
+    for index, landmark in enumerate(landmarks[: len(manual_reference_markers)]):
+        abs_x = landmark.get("abs_x_um")
+        abs_y = landmark.get("abs_y_um")
+        if abs_x is None or abs_y is None:
+            continue
+        abs_x = float(abs_x)
+        abs_y = float(abs_y)
+        if not (state.x <= abs_x <= state.x + state.fov_width and state.y <= abs_y <= state.y + state.fov_height):
+            continue
+        marker = manual_reference_markers[index]
+        label = manual_reference_labels[index]
+        marker.set_data([abs_x], [abs_y])
+        marker.set_visible(True)
+        label.set_position((abs_x + state.fov_width * 0.012, abs_y - state.fov_height * 0.015))
+        label.set_text(f"M{index + 1}")
+        label.set_visible(True)
+        in_view_count += 1
+
+    if getattr(state, "manual_reference_landmark_mode", False):
+        manual_reference_summary.set_position((state.x + state.fov_width * 0.02, state.y + state.fov_height * 0.10))
+        manual_reference_summary.set_text(
+            f"Manual reference landmarks: {len(landmarks)} saved"
+            " | left-click to add | right-click to finish | use tip-surrounding landmarks"
+        )
+        manual_reference_summary.set_visible(True)
+    elif in_view_count:
+        manual_reference_summary.set_position((state.x + state.fov_width * 0.02, state.y + state.fov_height * 0.10))
+        manual_reference_summary.set_text(f"Saved manual reference landmarks in view: {in_view_count}")
+        manual_reference_summary.set_visible(True)
+
+
+def update_lowmag_guidance_overlay(tip_x, tip_y):
+    lowmag_guidance_target_marker.set_visible(False)
+    lowmag_guidance_target_marker.set_data([], [])
+    lowmag_guidance_target_text.set_visible(False)
+    lowmag_guidance_target_text.set_text("")
+    lowmag_guidance_summary.set_visible(False)
+    lowmag_guidance_summary.set_text("")
+    for line in lowmag_guidance_lines:
+        line.set_visible(False)
+        line.set_data([], [])
+    for label in lowmag_guidance_labels:
+        label.set_visible(False)
+        label.set_text("")
+
+    report = getattr(state, "lowmag_guidance_report", None) or {}
+    matches = list(report.get("matches", []))
+    if not matches:
+        return
+    report_zoom = report.get("zoom_level")
+    if report_zoom is not None and float(state.current_zoom_level) > max(float(report_zoom), 0.5) + 0.01:
+        return
+
+    in_view_count = 0
+    for index, match in enumerate(matches[: len(lowmag_guidance_lines)]):
+        center_x = match.get("abs_x_um")
+        center_y = match.get("abs_y_um")
+        if center_x is None or center_y is None:
+            continue
+        center_x = float(center_x)
+        center_y = float(center_y)
+        if not (state.x <= center_x <= state.x + state.fov_width and state.y <= center_y <= state.y + state.fov_height):
+            continue
+        line = lowmag_guidance_lines[index]
+        label = lowmag_guidance_labels[index]
+        line.set_data([tip_x, center_x], [tip_y, center_y])
+        line.set_visible(True)
+        label.set_position((center_x + state.fov_width * 0.008, center_y - state.fov_height * 0.012))
+        label.set_text(
+            f"L{match.get('index', index + 1)}  "
+            f"tip {0.0 if match.get('reference_tip_distance_um') is None else match['reference_tip_distance_um']:.0f} um"
+        )
+        label.set_visible(True)
+        in_view_count += 1
+
+    target_x = report.get("estimated_tip_x_um")
+    target_y = report.get("estimated_tip_y_um")
+    if target_x is not None and target_y is not None:
+        target_x = float(target_x)
+        target_y = float(target_y)
+        if state.x <= target_x <= state.x + state.fov_width and state.y <= target_y <= state.y + state.fov_height:
+            lowmag_guidance_target_marker.set_data([target_x], [target_y])
+            lowmag_guidance_target_marker.set_visible(True)
+            lowmag_guidance_target_text.set_position((target_x + state.fov_width * 0.012, target_y - state.fov_height * 0.018))
+            lowmag_guidance_target_text.set_text("Low-mag guided tip")
+            lowmag_guidance_target_text.set_visible(True)
+
+    summary_parts = [
+        f"Low-mag map: {report.get('support_count', 0)} landmarks",
+        f"conf {report.get('confidence', 0.0):.2f}",
+    ]
+    if report.get("estimated_tip_distance_um") is not None:
+        summary_parts.append(f"tip shift {report['estimated_tip_distance_um']:.1f} um")
+    if report.get("mean_distance_error_um") is not None:
+        summary_parts.append(f"dist err {report['mean_distance_error_um']:.1f} um")
+    lowmag_guidance_summary.set_position((state.x + state.fov_width * 0.02, state.y + state.fov_height * 0.14))
+    lowmag_guidance_summary.set_text(" | ".join(summary_parts))
+    lowmag_guidance_summary.set_visible(bool(in_view_count or lowmag_guidance_target_marker.get_visible()))
 
 
 def update_landmark_overlay(tip_x, tip_y, hud_visible):
@@ -1253,7 +1564,7 @@ def update_landmark_overlay(tip_x, tip_y, hud_visible):
 
     site_memory = state.site_memory or {}
     reference_landmarks = site_memory.get("highmag_landmarks") or []
-    current_view = state.current_camera_view if state.current_camera_view is not None else state.current_fov_raw
+    current_view = state.current_matching_view if state.current_matching_view is not None else state.current_fov_raw
     if not reference_landmarks or current_view is None:
         state.hud_landmark_matches = []
         state.hud_landmark_report = None
@@ -1465,6 +1776,7 @@ callbacks = AFMCallbacks(
     artifact_layer,
 )
 callbacks.img = img
+session_trace_recorder = SessionTraceRecorder(SESSION_TRACE_DIR)
 callbacks.set_log_callback(log_message)
 callbacks.set_status_callback(refresh_status_panel)
 callbacks.set_persist_default_callback(lambda default_info: save_default_settings(default_info, autoload=True))
@@ -1477,6 +1789,7 @@ bind_logged_button("right", "Move Right", callbacks.move_right)
 bind_logged_button("pause_motion", "Toggle Motion Pause", callbacks.toggle_pause)
 bind_logged_button("stop_move", "Stop Motion Here", callbacks.stop_motion)
 bind_logged_button("jump_target", "Jump To Destination", callbacks.jump_to_destination)
+bind_logged_button("random_move", "Random Cantilever Move", callbacks.random_offset_move)
 
 bind_logged_button("pi", "Toggle PI Compensation", callbacks.toggle_pi)
 bind_logged_button("auto", "Start Auto Scan", callbacks.start_auto_scan)
@@ -1491,6 +1804,7 @@ def _toggle_ml_mode(event=None):
 bind_logged_button("save_ref", "Save Region Memory", callbacks.save_reference)
 bind_logged_button("remove_sample", "Remount Sample", callbacks.remove_sample)
 bind_logged_button("auto_origin", "Pick Local Origin", callbacks.auto_origin_unsupervised)
+bind_logged_button("mark_landmarks", "Mark Reference Landmarks", callbacks.begin_manual_reference_landmarks)
 bind_logged_button("ml_origin", "Find Saved Origin", callbacks.ml_find_origin)
 bind_logged_button("relocate", "Recover Site", callbacks.relocate)
 bind_logged_button("ai_recall", "AI Recall & Recover", callbacks.ai_recall_and_recover)
@@ -1558,6 +1872,10 @@ def on_close(event):
         return
     is_closing = True
     try:
+        if session_trace_recorder is not None:
+            session_trace_recorder.append(
+                f"[Session Closed] lines={session_trace_recorder.line_count()} file={session_trace_recorder.snapshot_path()}"
+            )
         data.save()
         data.plot()
     except Exception as e:
@@ -1591,8 +1909,16 @@ log_message("Auto Origin is a local landmark helper in the current viewport. Fin
 log_message("High-mag pattern recognition now uses the camera-visible view, with cantilever-body occlusion applied so hidden texture under the probe is not used for matching.")
 log_message("Press 'M' key to toggle ML mode (5w model vs ORB+RANSAC for coarse localization).")
 fig.canvas.mpl_connect("key_press_event", _toggle_ml_mode)
+log_message(f"Session trace auto-save: {session_trace_recorder.snapshot_path()}")
 log_message("Named regions: Viewport, FOV, Relocation Trace Dock, Navigation Dock, Motion Dock, Status Dock, Relocation Dock, Utility Dock.")
 log_message("Suggested order: load image at low mag -> move to the region of interest -> zoom in to the scan site -> set the named origin -> save site memory -> remove and replace sample -> optionally guide near the old region -> run recovery and verification.")
 if runtime_default_config.get("autoload"):
     callbacks.load_default_image()
+    callbacks._reset_view_to_zoom(
+        min(state.zoom_levels),
+        center_x_um=float(state.probe_tip_x),
+        center_y_um=float(state.probe_tip_y),
+    )
+    callbacks._refresh_current_view()
+    callbacks.update_title()
 plt.show()

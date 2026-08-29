@@ -2,7 +2,7 @@
 train_remount_5w.py — 大样本 Remount 变换回归训练（5万样本/锚点）
 
 方案：
-  1. 以每次 save region 保存的 reference_template 为局部锚点
+  1. 以每次 save region 保存的 live_camera_view 为局部锚点
      （不依赖其绝对物理位姿）
   2. 对每个锚点图生成 50,000 张带已知相对仿射变换的歪图
   3. 用 ResNet18 提取 (锚点, 歪图) 的差分特征
@@ -11,7 +11,7 @@ train_remount_5w.py — 大样本 Remount 变换回归训练（5万样本/锚点
 
 与旧版区别：
   - 旧版: overview 图像, 12 样本/站点, 输出 dx_um/dy_um
-  - 新版: reference_template 锚点, 50000 样本/锚点, 输出 dx_px/dy_px/angle_deg
+  - 新版: live_camera_view 锚点, 50000 样本/锚点, 输出 dx_px/dy_px/angle_deg
           （像素空间，调用方自行 × scale 转 um）
 
 使用:
@@ -32,10 +32,14 @@ from sklearn.neural_network import MLPRegressor
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # 复用现有模块
 from afm_ml_recognition import DeepFeatureExtractor, deep_pair_features, FEATURE_DIM
-from afm_phase2_ml import _load_site_memories
+from afm_phase2_ml import _load_site_memories, preferred_training_view
 from afm_relocation import apply_affine, rotation_translation_affine, to_grayscale_u8
 
 BASE_DIR = PROJECT_ROOT
@@ -88,34 +92,34 @@ def build_5w_dataset(
     if not site_memories:
         raise ValueError("No saved site memories found.")
 
-    # 收集所有锚点图 (reference_template)
+    # 收集所有锚点图 (prefer live_camera_view, fall back only for legacy site memories)
     anchors = []
     for site_dir, memory in site_memories:
-        template = memory.get("reference_template")
+        template, image_source = preferred_training_view(memory)
         if template is not None:
             gray = to_grayscale_u8(template)
             if gray is not None and gray.size > 0:
-                anchors.append((site_dir.name, gray))
+                anchors.append((site_dir.name, gray, image_source))
 
     # 去重：相同图像内容只保留一份（MD5哈希）
     seen = set()
     unique_anchors = []
-    for name, gray in anchors:
+    for name, gray, image_source in anchors:
         h = hashlib.md5(gray.tobytes()).hexdigest()
         if h not in seen:
             seen.add(h)
-            unique_anchors.append((name, gray))
+            unique_anchors.append((name, gray, image_source))
     if len(unique_anchors) < len(anchors):
         print(f"去重: {len(anchors)} → {len(unique_anchors)} 个唯一锚点"
               f"（跳过 {len(anchors) - len(unique_anchors)} 个重复）")
     anchors = unique_anchors
 
     if not anchors:
-        raise ValueError("No valid reference_template found in any site_memory.")
+        raise ValueError("No valid saved camera view found in any site_memory.")
 
     print(f"找到 {len(anchors)} 个锚点图")
-    for name, img in anchors:
-        print(f"  - {name}: {img.shape[1]}x{img.shape[0]}")
+    for name, img, image_source in anchors:
+        print(f"  - {name}: {img.shape[1]}x{img.shape[0]} ({image_source})")
 
     total_samples = len(anchors) * samples_per_anchor
     print(f"\n目标总样本数: {total_samples:,} ({len(anchors)} 锚点 × {samples_per_anchor:,})")
@@ -129,7 +133,7 @@ def build_5w_dataset(
     sample_idx = 0
     t_start = time.time()
 
-    for anchor_idx, (anchor_name, anchor_gray) in enumerate(anchors):
+    for anchor_idx, (anchor_name, anchor_gray, _) in enumerate(anchors):
         print(f"\n[锚点 {anchor_idx + 1}/{len(anchors)}] {anchor_name}")
 
         # 预提取锚点特征（复用，避免重复计算）

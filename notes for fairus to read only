@@ -1,0 +1,7 @@
+  What the AI should learn:
+
+  - not “where is the true sample image”
+  - but “given this low-mag camera view, where is the saved landmark constellation
+    relative to the tip”
+
+    

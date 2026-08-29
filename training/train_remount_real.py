@@ -23,8 +23,13 @@ from sklearn.neural_network import MLPRegressor
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from afm_ml_recognition import DeepFeatureExtractor, FEATURE_DIM
+from afm_phase2_ml import preferred_training_view
 from afm_relocation import (
     apply_affine,
     estimate_affine_transform,
@@ -40,13 +45,14 @@ OUTPUT_PATH = PROJECT_ROOT / "collected_data" / "models" / "deep_remount_predict
 # ═══════════════════════════════════════════════════════════════
 # Step 1: 收集真实帧对
 # ═══════════════════════════════════════════════════════════════
-def collect_real_pairs():
+def collect_real_pairs(site_memory_root=SITE_MEMORY_ROOT):
     """从 site_memories 中收集同一个 sample 的 ref_template 对"""
+    site_memory_root = Path(site_memory_root)
     by_sample = {}
-    for site_dir in sorted(SITE_MEMORY_ROOT.rglob("metadata.json")):
+    for site_dir in sorted(site_memory_root.rglob("metadata.json")):
         try:
             mem = load_site_memory(site_dir.parent)
-            tpl = mem.get("reference_template")
+            tpl, image_source = preferred_training_view(mem)
             if tpl is None:
                 continue
             gray = to_grayscale_u8(tpl)
@@ -58,6 +64,7 @@ def collect_real_pairs():
             by_sample[sample_id].append({
                 "name": site_dir.parent.name,
                 "image": gray,
+                "image_source": image_source,
                 "ref_x": float((mem.get("reference_top_left") or {}).get("x_um", 0)),
                 "ref_y": float((mem.get("reference_top_left") or {}).get("y_um", 0)),
                 "fov_w": float((mem.get("fov_size_um") or {}).get("width_um", 840)),
@@ -125,13 +132,17 @@ def compute_ground_truth(img_a, img_b, fov_w_a, fov_h_a, fov_w_b, fov_h_b):
 # ═══════════════════════════════════════════════════════════════
 # Step 3: 构建特征 + 训练
 # ═══════════════════════════════════════════════════════════════
-def train_on_real_pairs(device="cpu"):
+def train_on_real_pairs(device="cpu", site_memory_root=SITE_MEMORY_ROOT, output_path=OUTPUT_PATH):
+    site_memory_root = Path(site_memory_root)
+    output_path = Path(output_path)
     print("=" * 60)
     print("真实帧对训练: Remount 预测模型")
     print("=" * 60)
+    print(f"Site memory root: {site_memory_root}")
+    print(f"Output path: {output_path}")
 
     # 收集帧对
-    pairs = collect_real_pairs()
+    pairs = collect_real_pairs(site_memory_root=site_memory_root)
     print(f"\n找到 {len(pairs)} 个帧对")
     if not pairs:
         print("FAIL 未找到可用的帧对. 需要同一个 sample 的至少 2 帧")
@@ -217,10 +228,10 @@ def train_on_real_pairs(device="cpu"):
         "pair_count": valid_count,
         "training_data": "real_pairs",
     }
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, OUTPUT_PATH)
-    print(f"\n模型已保存: {OUTPUT_PATH}")
-    print(f"文件大小: {OUTPUT_PATH.stat().st_size / 1024:.1f} KB")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(bundle, output_path)
+    print(f"\n模型已保存: {output_path}")
+    print(f"文件大小: {output_path.stat().st_size / 1024:.1f} KB")
 
     return bundle
 
@@ -228,9 +239,23 @@ def train_on_real_pairs(device="cpu"):
 def main():
     parser = argparse.ArgumentParser(description="真实帧对训练 Remount 模型")
     parser.add_argument("--device", default="cpu", help="cpu or cuda")
+    parser.add_argument(
+        "--site-memory-root",
+        default=str(SITE_MEMORY_ROOT),
+        help="Root directory containing saved site memories.",
+    )
+    parser.add_argument(
+        "--output-path",
+        default=str(OUTPUT_PATH),
+        help="Output path for the trained model bundle.",
+    )
     args = parser.parse_args()
     try:
-        train_on_real_pairs(device=args.device)
+        train_on_real_pairs(
+            device=args.device,
+            site_memory_root=args.site_memory_root,
+            output_path=args.output_path,
+        )
     except KeyboardInterrupt:
         print("\n中断")
     except Exception as e:

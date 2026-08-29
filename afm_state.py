@@ -53,6 +53,7 @@ class AFMState:
         self.max_zoom_level = max(self.zoom_levels)
         self.current_fov_raw = None
         self.current_camera_view = None
+        self.current_matching_view = None
 
         self.pi_mode = False
 
@@ -137,6 +138,8 @@ class AFMState:
         self.origin_defined = False
         self.origin_template = None
         self.origin_template_half_size = 48
+        self.manual_reference_landmark_mode = False
+        self.manual_reference_landmarks = []
 
         self.ref_artefacts = []
         self.ref_template = None
@@ -152,10 +155,31 @@ class AFMState:
         self.relocation_min_landmark_support = 2
         self.relocation_min_affine_confidence = 0.12
         self.relocation_min_affine_inliers = 12
+        self.relocation_use_camera_frames_only = True
         self.force_ml_mode = False  # 强制使用5w ML模型（跳过ORB）
         self.relocation_fine_half_range_um = 700.0
         self.relocation_verify_half_range_um = 120.0
         self.relocation_max_iterations = 3
+        self.lowmag_search_max_rings = 4
+        self.lowmag_search_step_fraction = 0.60
+        self.lowmag_search_min_confidence = 0.38
+        self.lowmag_search_min_support = 3
+        self.lowmag_search_min_geometry_confidence = 0.30
+        self.lowmag_search_min_overview_similarity = 0.20
+        self.lowmag_search_candidate_limit = 5
+        self.lowmag_search_fine_try_count = 3
+        self.lowmag_search_fast_fail_enabled = True
+        self.lowmag_search_fast_fail_max_frames = 6
+        self.lowmag_search_fast_fail_min_support = 2
+        self.lowmag_search_fast_fail_min_confidence = 0.55
+        self.lowmag_search_fast_fail_min_overview_similarity = 0.45
+        self.reference_lowmag_min_landmarks = 3
+        self.reference_lowmag_max_landmarks = 12
+        self.reference_lowmag_capture_step_fraction = 0.45
+        self.reference_lowmag_capture_positions = 5
+        self.reference_auto_fine_zoom_level = 5.0
+        self.relocation_lowmag_only_mode = True
+        self.reference_lowmag_disable_blur = True
         self.simulated_sample_shift_x_um = 0.0
         self.simulated_sample_shift_y_um = 0.0
         self.simulated_sample_rotation_deg = 0.0
@@ -167,6 +191,10 @@ class AFMState:
         self.ai_relocate_awaiting_click = False
         self.ai_relocate_pending_target_x = None
         self.ai_relocate_pending_target_y = None
+        self.manual_landmark_guidance_active = False
+        self.manual_landmark_clicked_points = []
+        self.manual_landmark_estimate = None
+        self.lowmag_guidance_report = None
 
         # Page 3 (AI Zoom): zoom search state
         self.ai_zoom_search_active = False
